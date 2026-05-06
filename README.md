@@ -18,7 +18,14 @@ git clone https://github.com/wuji419-bit/OpenAI-PS.git
 cd OpenAI-PS
 ```
 
+## 赞助支持
+
+如果这个项目对你有帮助，欢迎通过下面的二维码赞助支持。
+
+| 微信赞助 | 支付宝赞助 |
+| --- | --- |
+| <img src="assets/sponsor/wechat.png" alt="微信赞助二维码" width="260"> | <img src="assets/sponsor/alipay.png" alt="支付宝赞助二维码" width="260"> |
+
 ## 开源协议
 
 本项目使用 MIT License 开源，详情请查看 `LICENSE` 文件。
-
