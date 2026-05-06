@@ -1,17 +1,16 @@
 # OpenAI PS
 
-OpenAI PS 是一个用于存放 Codex GitHub 插件内容的开源项目。当前项目包含 `github-plugin` 目录，里面是 GitHub 相关的 Codex 插件文件、技能说明和资源。
+OpenAI PS 是一个面向 Adobe Photoshop 的开源插件项目，目标是把 OpenAI 的图像生成与图像编辑能力接入 Photoshop，让用户可以在 PS 工作流中直接调用 OpenAI Image 相关能力。
 
-## 项目内容
+## 项目定位
 
-- `github-plugin/.codex-plugin/`：插件元数据
-- `github-plugin/skills/`：GitHub 工作流相关技能
-- `github-plugin/assets/`：插件资源文件
-- `github-plugin/.app.json`：应用配置文件
+- 在 Photoshop 中接入 OpenAI 图像能力
+- 支持围绕设计、修图、素材生成等场景扩展插件功能
+- 作为开源项目持续迭代，方便开发者学习、修改和二次开发
 
 ## 使用方式
 
-将本仓库克隆到本地后，可以查看 `github-plugin` 目录中的插件文件，并根据需要进行学习、修改或集成。
+将本仓库克隆到本地后，可以根据 Photoshop 插件开发流程进行安装、调试或二次开发。
 
 ```powershell
 git clone https://github.com/wuji419-bit/OpenAI-PS.git
