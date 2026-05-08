@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>UXP Settings Panel</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-tertiary-container": "#ffd1ab",
+                        "primary": "#99cbff",
+                        "on-primary-fixed": "#001d34",
+                        "surface-bright": "#393939",
+                        "surface-container-lowest": "#0e0e0e",
+                        "inverse-primary": "#0c629b",
+                        "surface-variant": "#353535",
+                        "secondary-fixed-dim": "#c8c6c6",
+                        "on-secondary-container": "#b6b5b4",
+                        "tertiary-fixed-dim": "#ffb875",
+                        "on-primary-container": "#beddff",
+                        "surface-container-highest": "#353535",
+                        "error-container": "#93000a",
+                        "on-primary": "#003355",
+                        "surface-container-high": "#2a2a2a",
+                        "inverse-on-surface": "#303030",
+                        "tertiary-fixed": "#ffdcc0",
+                        "tertiary": "#ffb875",
+                        "outline": "#8b919b",
+                        "on-error-container": "#ffdad6",
+                        "error": "#ffb4ab",
+                        "surface-dim": "#131313",
+                        "secondary-container": "#474747",
+                        "on-secondary-fixed": "#1b1c1c",
+                        "primary-container": "#0e639c",
+                        "surface": "#131313",
+                        "on-tertiary-fixed-variant": "#6b3b00",
+                        "inverse-surface": "#e4e2e1",
+                        "surface-tint": "#99cbff",
+                        "surface-container-low": "#1b1c1c",
+                        "tertiary-container": "#8e5000",
+                        "on-secondary-fixed-variant": "#474747",
+                        "on-secondary": "#303030",
+                        "secondary": "#c8c6c6",
+                        "secondary-fixed": "#e4e2e2",
+                        "on-tertiary-fixed": "#2d1600",
+                        "on-primary-fixed-variant": "#004a78",
+                        "on-tertiary": "#4b2800",
+                        "on-error": "#690005",
+                        "surface-container": "#1f2020",
+                        "on-surface-variant": "#c1c7d1",
+                        "primary-fixed-dim": "#99cbff",
+                        "outline-variant": "#414750",
+                        "on-background": "#e4e2e1",
+                        "background": "#131313",
+                        "primary-fixed": "#cfe5ff",
+                        "on-surface": "#e4e2e1"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "margin-x": "16px",
+                        "margin-y": "16px",
+                        "gutter": "8px",
+                        "component-gap": "8px",
+                        "unit": "4px"
+                    },
+                    "fontFamily": {
+                        "input-text": ["Inter"],
+                        "body-md": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "headline-sm": ["Inter"]
+                    },
+                    "fontSize": {
+                        "input-text": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+                        "body-md": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+                        "label-caps": ["11px", { "lineHeight": "14px", "letterSpacing": "0.05em", "fontWeight": "700" }],
+                        "headline-sm": ["14px", { "lineHeight": "20px", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body {
+            background-color: #131313; /* Fallback */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        /* Custom scrollbar for compactness */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #474747;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #8b919b;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface antialiased">
+<!-- Simulated Plugin Panel Container -->
+<div class="w-[546px] h-[1082px] bg-surface-container-highest flex flex-col shadow-2xl overflow-hidden border border-outline-variant">
+<!-- Header -->
+<header class="flex items-center h-10 px-margin-x border-b border-outline-variant shrink-0 bg-surface-container-highest">
+<button class="flex items-center justify-center w-6 h-6 rounded-DEFAULT hover:bg-surface-variant transition-colors group cursor-default" title="Back">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant group-hover:text-on-surface transition-colors" style="font-variation-settings: 'FILL' 0;">arrow_back</span>
+</button>
+<h1 class="font-headline-sm text-headline-sm text-on-surface ml-2">服务设置</h1>
+</header>
+<!-- Main Content (Scrollable) -->
+<main class="flex-1 overflow-y-auto p-margin-x flex flex-col gap-margin-y bg-surface-container-highest">
+<!-- Connection Section -->
+<div class="flex flex-col gap-component-gap">
+<div class="font-label-caps text-label-caps text-on-surface-variant uppercase border-b border-outline-variant pb-2 mb-2 mt-2">API Configuration</div>
+<!-- Base URL -->
+<div class="flex flex-col gap-[4px] mb-2">
+<label class="font-body-md text-body-md text-on-surface" for="baseUrl">Base URL</label>
+<input class="h-[28px] w-full bg-surface-container-high border border-outline-variant rounded-DEFAULT px-2 font-input-text text-input-text text-on-surface focus:border-primary-container focus:ring-0 focus:outline-none placeholder-outline" id="baseUrl" placeholder="https://api.example.com/v1" type="text" value="http://localhost:8080"/>
+</div>
+<!-- API Key -->
+<div class="flex flex-col gap-[4px] mb-2">
+<label class="font-body-md text-body-md text-on-surface" for="apiKey">API Key</label>
+<div class="relative flex items-center">
+<input class="h-[28px] w-full bg-surface-container-high border border-outline-variant rounded-DEFAULT pl-2 pr-8 font-input-text text-input-text text-on-surface focus:border-primary-container focus:ring-0 focus:outline-none placeholder-outline" id="apiKey" type="password" value="sk-xxxxxxxxxxxxxxxxxxxxxxxx"/>
+<button class="absolute right-1 w-6 h-6 flex items-center justify-center rounded-sm hover:bg-surface-variant text-on-surface-variant hover:text-on-surface cursor-default">
+<span class="material-symbols-outlined text-[14px]">visibility_off</span>
+</button>
+</div>
+</div>
+<!-- Model ID -->
+<div class="flex flex-col gap-[4px] mb-2">
+<label class="font-body-md text-body-md text-on-surface" for="modelId">Model ID</label>
+<div class="relative">
+<select class="h-[28px] w-full bg-surface-container-high border border-outline-variant rounded-DEFAULT px-2 pr-6 font-input-text text-input-text text-on-surface appearance-none focus:border-primary-container focus:ring-0 focus:outline-none cursor-default" id="modelId">
+<option value="dall-e-3">dall-e-3</option>
+<option value="dall-e-2">dall-e-2</option>
+<option value="custom-model-v1">custom-model-v1</option>
+</select>
+<span class="material-symbols-outlined absolute right-1.5 top-1/2 -translate-y-1/2 text-[14px] text-on-surface-variant pointer-events-none">expand_more</span>
+</div>
+</div>
+</div>
+<!-- Path Section -->
+<div class="flex flex-col gap-component-gap mt-4">
+<div class="font-label-caps text-label-caps text-on-surface-variant uppercase border-b border-outline-variant pb-2 mb-2">Endpoints</div>
+<!-- Image Gen Path -->
+<div class="flex flex-col gap-[4px] mb-2">
+<label class="font-body-md text-body-md text-on-surface" for="genPath">Image Gen Path</label>
+<input class="h-[28px] w-full bg-surface-container-high border border-outline-variant rounded-DEFAULT px-2 font-input-text text-input-text text-on-surface focus:border-primary-container focus:ring-0 focus:outline-none" id="genPath" type="text" value="/images/generations"/>
+</div>
+<!-- Edit Path -->
+<div class="flex flex-col gap-[4px] mb-2">
+<label class="font-body-md text-body-md text-on-surface" for="editPath">Edit Path</label>
+<input class="h-[28px] w-full bg-surface-container-high border border-outline-variant rounded-DEFAULT px-2 font-input-text text-input-text text-on-surface focus:border-primary-container focus:ring-0 focus:outline-none" id="editPath" type="text" value="/images/edits"/>
+</div>
+</div>
+</main>
+<!-- Footer Actions -->
+<footer class="flex items-center justify-end gap-gutter p-margin-x py-3 border-t border-outline-variant shrink-0 bg-surface-container-highest">
+<button class="h-[28px] px-4 flex items-center justify-center border border-outline-variant rounded-DEFAULT font-input-text text-input-text text-on-surface bg-transparent hover:bg-surface-variant transition-colors cursor-default">
+                测试连接
+            </button>
+<button class="h-[28px] px-4 flex items-center justify-center bg-primary-container border border-primary-container rounded-DEFAULT font-input-text text-input-text text-white hover:brightness-110 transition-all active:scale-[0.97] cursor-default shadow-sm">
+                保存配置
+            </button>
+</footer>
+</div>
+</body></html>

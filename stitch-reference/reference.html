@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DALL-E UXP - Reference Image</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-tertiary-container": "#ffd1ab",
+                        "primary": "#99cbff",
+                        "on-primary-fixed": "#001d34",
+                        "surface-bright": "#393939",
+                        "surface-container-lowest": "#0e0e0e",
+                        "inverse-primary": "#0c629b",
+                        "surface-variant": "#353535",
+                        "secondary-fixed-dim": "#c8c6c6",
+                        "on-secondary-container": "#b6b5b4",
+                        "tertiary-fixed-dim": "#ffb875",
+                        "on-primary-container": "#beddff",
+                        "surface-container-highest": "#353535",
+                        "error-container": "#93000a",
+                        "on-primary": "#003355",
+                        "surface-container-high": "#2a2a2a",
+                        "inverse-on-surface": "#303030",
+                        "tertiary-fixed": "#ffdcc0",
+                        "tertiary": "#ffb875",
+                        "outline": "#8b919b",
+                        "on-error-container": "#ffdad6",
+                        "error": "#ffb4ab",
+                        "surface-dim": "#131313",
+                        "secondary-container": "#474747",
+                        "on-secondary-fixed": "#1b1c1c",
+                        "primary-container": "#0e639c",
+                        "surface": "#131313",
+                        "on-tertiary-fixed-variant": "#6b3b00",
+                        "inverse-surface": "#e4e2e1",
+                        "surface-tint": "#99cbff",
+                        "surface-container-low": "#1b1c1c",
+                        "tertiary-container": "#8e5000",
+                        "on-secondary-fixed-variant": "#474747",
+                        "on-secondary": "#303030",
+                        "secondary": "#c8c6c6",
+                        "secondary-fixed": "#e4e2e2",
+                        "on-tertiary-fixed": "#2d1600",
+                        "on-primary-fixed-variant": "#004a78",
+                        "on-tertiary": "#4b2800",
+                        "on-error": "#690005",
+                        "surface-container": "#1f2020",
+                        "on-surface-variant": "#c1c7d1",
+                        "primary-fixed-dim": "#99cbff",
+                        "outline-variant": "#414750",
+                        "on-background": "#e4e2e1",
+                        "background": "#131313",
+                        "primary-fixed": "#cfe5ff",
+                        "on-surface": "#e4e2e1"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "margin-x": "12px",
+                        "margin-y": "8px",
+                        "gutter": "8px",
+                        "component-gap": "4px",
+                        "unit": "4px"
+                    },
+                    "fontFamily": {
+                        "input-text": ["Inter"],
+                        "body-md": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "headline-sm": ["Inter"]
+                    },
+                    "fontSize": {
+                        "input-text": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+                        "body-md": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+                        "label-caps": ["11px", { "lineHeight": "14px", "letterSpacing": "0.05em", "fontWeight": "700" }],
+                        "headline-sm": ["14px", { "lineHeight": "20px", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        /* Custom scrollbar for webkit */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #454545; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+        
+        /* Slider styling */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 12px;
+            width: 12px;
+            border-radius: 50%;
+            background: #99cbff;
+            cursor: pointer;
+            margin-top: -5px;
+            border: 1px solid #000;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 2px;
+            cursor: pointer;
+            background: #474747;
+            border-radius: 1px;
+        }
+        input[type=range]:focus { outline: none; }
+    </style>
+</head>
+<body class="bg-background text-on-surface h-[1082px] w-[546px] overflow-hidden flex flex-col font-body-md text-body-md select-none relative">
+<!-- TopAppBar -->
+<header class="flex justify-between items-center h-8 px-3 w-full bg-[#323232] border-b border-[#454545] shrink-0 z-50">
+<div class="text-xs font-bold text-[#E1E1E1] uppercase tracking-widest font-inter text-[11px] font-medium tracking-tight">DALL-E UXP</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-[#8E8E8E] hover:text-[#0E639C] hover:bg-[#454545] transition-colors cursor-default active:opacity-70 p-1 rounded-sm" style="font-variation-settings: 'FILL' 0;">fiber_manual_record</span>
+<span class="material-symbols-outlined text-[14px] text-[#8E8E8E] hover:text-[#0E639C] hover:bg-[#454545] transition-colors cursor-default active:opacity-70 p-1 rounded-sm" style="font-variation-settings: 'FILL' 0;">settings</span>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden">
+<!-- SideNavBar -->
+<nav class="flex flex-col w-12 h-full shrink-0 bg-[#252525] border-r border-[#454545] z-40">
+<div class="flex flex-col gap-1 mt-2">
+<button class="flex flex-col items-center justify-center h-12 w-full text-[#B5B5B5] hover:bg-[#323232] transition-all duration-150 group" title="Generate">
+<span class="material-symbols-outlined text-[20px] mb-1 group-hover:text-white" style="font-variation-settings: 'FILL' 0;">auto_awesome</span>
+</button>
+<button class="flex flex-col items-center justify-center h-12 w-full bg-[#454545] text-white border-l-2 border-[#0E639C] transition-all duration-150" title="Variations">
+<span class="material-symbols-outlined text-[20px] mb-1 text-primary-fixed-dim" style="font-variation-settings: 'FILL' 1;">layers</span>
+</button>
+<button class="flex flex-col items-center justify-center h-12 w-full text-[#B5B5B5] hover:bg-[#323232] transition-all duration-150 group" title="Edit">
+<span class="material-symbols-outlined text-[20px] mb-1 group-hover:text-white" style="font-variation-settings: 'FILL' 0;">brush</span>
+</button>
+</div>
+</nav>
+<!-- Main Content Area -->
+<main class="flex-1 flex flex-col relative overflow-hidden bg-surface">
+<div class="p-margin-x flex flex-col gap-margin-y overflow-y-auto h-full">
+<!-- Section Header -->
+<div class="flex items-center gap-2 mb-2 shrink-0">
+<span class="material-symbols-outlined text-[18px] text-on-surface-variant">layers</span>
+<h1 class="font-headline-sm text-headline-sm text-on-surface">Reference Image</h1>
+</div>
+<!-- Image Upload Zone -->
+<div class="flex flex-col gap-1 shrink-0">
+<label class="font-label-caps text-label-caps text-on-surface-variant">SOURCE IMAGE</label>
+<div class="border border-outline-variant border-dashed rounded-DEFAULT bg-surface-container-low h-48 flex flex-col items-center justify-center gap-2 hover:bg-surface-container transition-colors cursor-pointer relative group overflow-hidden">
+<div class="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&amp;w=2564&amp;auto=format&amp;fit=crop')] bg-cover bg-center opacity-60 mix-blend-luminosity group-hover:opacity-80 transition-opacity" data-alt="abstract geometric rendering in dark cinematic lighting with moody atmosphere"></div>
+<div class="absolute inset-0 bg-gradient-to-t from-surface/80 to-transparent"></div>
+<div class="relative z-10 flex flex-col items-center pointer-events-none">
+<span class="material-symbols-outlined text-[32px] text-on-surface-variant mb-1 group-hover:text-primary transition-colors">add_photo_alternate</span>
+<span class="font-body-md text-body-md text-on-surface">Drop image or click to browse</span>
+<span class="text-[10px] text-on-surface-variant mt-1">Supports PNG, JPG (Max 5MB)</span>
+</div>
+</div>
+</div>
+<!-- Strength Slider -->
+<div class="flex flex-col gap-2 p-3 bg-surface-container-low rounded-DEFAULT border border-outline-variant mt-2 shrink-0">
+<div class="flex justify-between items-center">
+<label class="font-label-caps text-label-caps text-on-surface-variant flex items-center gap-1">
+                            INFLUENCE STRENGTH
+                            <span class="material-symbols-outlined text-[12px] text-on-surface-variant cursor-help" title="Higher values make output closer to reference">info</span>
+</label>
+<span class="font-input-text text-input-text text-primary bg-surface-bright px-1.5 py-0.5 rounded-sm border border-outline-variant">0.75</span>
+</div>
+<div class="flex items-center gap-2 mt-1">
+<span class="text-[10px] text-on-surface-variant">Low</span>
+<input class="flex-1" max="1" min="0" step="0.01" type="range" value="0.75"/>
+<span class="text-[10px] text-on-surface-variant">High</span>
+</div>
+</div>
+<!-- Prompting Section -->
+<div class="flex flex-col gap-unit mt-2 shrink-0">
+<label class="font-label-caps text-label-caps text-on-surface-variant">PROMPT MODIFICATION</label>
+<div class="flex flex-col gap-2 border border-outline-variant rounded-DEFAULT bg-surface-container-low p-2">
+<textarea class="w-full bg-surface border border-outline-variant rounded-sm p-2 font-input-text text-input-text text-on-surface placeholder:text-on-surface-variant focus:border-primary focus:ring-1 focus:ring-primary resize-none h-20" placeholder="Describe how to modify or interpret the reference image..."></textarea>
+<div class="flex items-center justify-between mt-1">
+<div class="flex items-center gap-2">
+<button class="flex items-center gap-1 text-[10px] text-on-surface-variant hover:text-on-surface px-1.5 py-1 rounded-sm hover:bg-surface-variant transition-colors border border-transparent hover:border-outline-variant">
+<span class="material-symbols-outlined text-[12px]">history</span>
+                                    History
+                                </button>
+<button class="flex items-center gap-1 text-[10px] text-on-surface-variant hover:text-on-surface px-1.5 py-1 rounded-sm hover:bg-surface-variant transition-colors border border-transparent hover:border-outline-variant">
+<span class="material-symbols-outlined text-[12px]">magic_button</span>
+                                    Enhance
+                                </button>
+</div>
+</div>
+</div>
+</div>
+<!-- Parameters Grid -->
+<div class="flex flex-col gap-unit mt-2 shrink-0">
+<label class="font-label-caps text-label-caps text-on-surface-variant">PARAMETERS</label>
+<div class="grid grid-cols-2 gap-2">
+<!-- Quality -->
+<div class="border border-outline-variant rounded-sm bg-surface-container-low overflow-hidden">
+<div class="bg-surface-container-high px-2 py-1 text-[10px] text-on-surface-variant border-b border-outline-variant">Quality</div>
+<div class="flex p-1 gap-1">
+<button class="flex-1 py-1 text-[11px] text-on-surface hover:bg-surface-variant rounded-sm transition-colors border border-transparent">Standard</button>
+<button class="flex-1 py-1 text-[11px] bg-secondary-container text-on-surface border border-outline-variant rounded-sm shadow-sm">HD</button>
+</div>
+</div>
+<!-- Count -->
+<div class="border border-outline-variant rounded-sm bg-surface-container-low overflow-hidden">
+<div class="bg-surface-container-high px-2 py-1 text-[10px] text-on-surface-variant border-b border-outline-variant">Variations</div>
+<div class="flex p-1 gap-1">
+<button class="flex-1 py-1 text-[11px] text-on-surface hover:bg-surface-variant rounded-sm transition-colors border border-transparent">1</button>
+<button class="flex-1 py-1 text-[11px] text-on-surface hover:bg-surface-variant rounded-sm transition-colors border border-transparent">2</button>
+<button class="flex-1 py-1 text-[11px] bg-secondary-container text-on-surface border border-outline-variant rounded-sm shadow-sm">3</button>
+<button class="flex-1 py-1 text-[11px] text-on-surface hover:bg-surface-variant rounded-sm transition-colors border border-transparent">4</button>
+</div>
+</div>
+<!-- Size -->
+<div class="border border-outline-variant rounded-sm bg-surface-container-low overflow-hidden col-span-2">
+<div class="bg-surface-container-high px-2 py-1 text-[10px] text-on-surface-variant border-b border-outline-variant">Dimensions</div>
+<select class="w-full bg-transparent border-none text-[11px] text-on-surface p-1.5 focus:ring-0 cursor-pointer outline-none">
+<option class="bg-surface-container text-on-surface" value="1024x1024">1024 x 1024 (Square)</option>
+<option class="bg-surface-container text-on-surface" selected="" value="1024x1792">1024 x 1792 (Vertical)</option>
+<option class="bg-surface-container text-on-surface" value="1792x1024">1792 x 1024 (Horizontal)</option>
+</select>
+</div>
+</div>
+</div>
+<!-- Results Grid -->
+<div class="flex flex-col gap-unit mt-4 flex-1 mb-4">
+<label class="font-label-caps text-label-caps text-on-surface-variant">GENERATED RESULTS</label>
+<div class="grid grid-cols-2 gap-2 flex-1 min-h-[200px]">
+<div class="border border-outline-variant border-dashed rounded-DEFAULT bg-surface-container-low flex flex-col items-center justify-center text-on-surface-variant opacity-50 hover:opacity-100 hover:border-primary cursor-pointer transition-all">
+<span class="material-symbols-outlined text-[24px]">image</span>
+</div>
+<div class="border border-outline-variant border-dashed rounded-DEFAULT bg-surface-container-low flex flex-col items-center justify-center text-on-surface-variant opacity-50 hover:opacity-100 hover:border-primary cursor-pointer transition-all">
+<span class="material-symbols-outlined text-[24px]">image</span>
+</div>
+<div class="border border-outline-variant border-dashed rounded-DEFAULT bg-surface-container-low flex flex-col items-center justify-center text-on-surface-variant opacity-50 hover:opacity-100 hover:border-primary cursor-pointer transition-all">
+<span class="material-symbols-outlined text-[24px]">image</span>
+</div>
+<div class="border border-outline-variant border-dashed rounded-DEFAULT bg-surface-container-low flex flex-col items-center justify-center text-on-surface-variant opacity-50 hover:opacity-100 hover:border-primary cursor-pointer transition-all">
+<span class="material-symbols-outlined text-[24px]">image</span>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+<!-- Footer / Action Bar -->
+<footer class="flex justify-end items-center gap-2 p-3 w-full bg-[#323232] border-t border-[#454545] shrink-0 z-50">
+<span class="text-[10px] text-on-surface-variant mr-auto font-inter">v1.0.4 Connected</span>
+<button class="border border-[#454545] text-[#E1E1E1] px-3 py-1.5 rounded-sm hover:brightness-110 active:scale-[0.97] transition-transform font-inter text-[11px] flex items-center gap-1 bg-surface-container-low">
+<span class="material-symbols-outlined text-[14px]">delete</span>
+            Clear
+        </button>
+<button class="border border-[#454545] text-[#E1E1E1] px-3 py-1.5 rounded-sm hover:brightness-110 active:scale-[0.97] transition-transform font-inter text-[11px] flex items-center gap-1 bg-surface-container-low">
+<span class="material-symbols-outlined text-[14px]">file_download</span>
+            Import
+        </button>
+<button class="bg-[#0E639C] text-white px-4 py-1.5 rounded-sm hover:brightness-110 active:scale-[0.97] transition-transform font-inter text-[11px] font-medium flex items-center gap-1 border border-transparent shadow-[0_1px_2px_rgba(0,0,0,0.3)]">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">generating_tokens</span>
+            Generate
+        </button>
+</footer>
+</body></html>

@@ -1,0 +1,23 @@
+# Secrets
+.env
+.env.*
+*.key
+*.pem
+
+# Photoshop / UXP local state
+.uxp/
+dist/
+build/
+*.ccx
+*.psd
+*.psb
+
+# Generated assets
+generated/
+outputs/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

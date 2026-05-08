@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenAI 图片</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+    <script src="./src/app.js" defer></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section id="workspaceView" class="workspace-view">
+        <header class="topbar">
+          <div class="topbar-main">
+            <div class="title-inline">
+              <span id="connectionBadge" class="connection-dot" aria-hidden="true" title="未配置 API Key"></span>
+              <h1>OpenAI 图片</h1>
+              <span id="versionText" class="version-inline">v0.1.20</span>
+            </div>
+            <button id="settingsToggleBtn" class="icon-button settings-entry-button" type="button" title="打开 API 设置" aria-label="打开 API 设置">
+              <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3.75 13.2 6l2.48.5-.66 2.45 1.76 1.76-1.76 1.76.66 2.45-2.48.5L12 18.25l-1.2-2.23-2.48-.5.66-2.45-1.76-1.76 1.76-1.76-.66-2.45 2.48-.5L12 3.75Z" />
+                <circle cx="12" cy="11.98" r="2.2" />
+              </svg>
+            </button>
+            <p id="modeHint" class="sr-only">直接生成新图</p>
+          </div>
+          <nav class="mode-segmented" id="modeGrid" aria-label="生成模式">
+            <button class="is-active" type="button" data-mode="generate">文生图</button>
+            <button type="button" data-mode="reference">参考图</button>
+            <button type="button" data-mode="inpaint">选区重绘</button>
+            <button type="button" data-mode="outpaint">扩图</button>
+          </nav>
+        </header>
+
+        <section id="quickApiPanel" class="quick-api-panel hidden" aria-label="快速 API Key 设置">
+          <div class="quick-api-copy">
+            <strong>先填写 OpenAI API Key</strong>
+            <span>保存后即可直接生成；Base URL、模型和路径可在 API 设置里调整。</span>
+          </div>
+          <div class="quick-api-row">
+            <input id="quickApiKeyInput" type="password" placeholder="sk-..." />
+            <button id="quickSaveApiKeyBtn" class="secondary-button compact-button" type="button">保存</button>
+          </div>
+        </section>
+
+        <div class="workspace-scroll">
+          <section id="modeContextPanel" class="section-block mode-context-panel hidden">
+            <div class="mode-context-head">
+              <span id="modeContextIcon" class="mode-context-icon">✦</span>
+              <div>
+                <div id="modeContextTitle" class="minor-title">模式</div>
+                <div id="modeContextText" class="mode-context-text"></div>
+              </div>
+            </div>
+            <div id="referenceContext" class="mode-context-body hidden">
+              <div class="source-drop-zone">
+                <svg class="source-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4.5 6.5h15v11h-15z" />
+                  <path d="m7.5 15 3-3 2.2 2.2 2.6-3.4 2.2 4.2" />
+                </svg>
+                <strong>使用当前 Photoshop 文档作为参考图</strong>
+                <span>生成前会自动导出当前画布，作为图片编辑接口的 image 输入。</span>
+              </div>
+              <label class="context-slider">
+                <span class="form-label">影响强度 <strong>0.75</strong></span>
+                <input type="range" min="0" max="1" step="0.01" value="0.75" disabled />
+              </label>
+            </div>
+            <div id="selectionContext" class="mode-context-body hidden">
+              <div class="source-drop-zone compact">
+                <svg class="source-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5 5h14v14H5z" />
+                  <path d="M8 8h8v8H8z" />
+                </svg>
+                <strong>使用当前矩形选区作为编辑范围</strong>
+                <span>没有矩形选区时会阻止生成并显示错误；扩图会基于当前画布生成透明蒙版。</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="section-block prompt-section">
+            <div class="section-header">
+              <label id="promptLabel" for="promptInput" class="section-label">提示词 (Prompt)</label>
+              <div class="tool-strip">
+                <button id="useSelectionSizeBtn" class="tool-icon-button" type="button" title="按当前选区匹配尺寸" aria-label="按当前选区匹配尺寸">
+                  <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 6.5h16M4 17.5h16M7 4v5M17 15v5" />
+                  </svg>
+                </button>
+                <button id="clearPromptBtn" class="tool-icon-button" type="button" title="清空提示词" aria-label="清空提示词">
+                  <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M5 7.5h14M9 7.5V5h6v2.5M8.5 10v7M12 10v7M15.5 10v7M7.5 7.5l.7 11h7.6l.7-11" />
+                  </svg>
+                </button>
+                <button id="promptPresetBtn" class="tool-icon-button" type="button" title="提示词模板" aria-label="提示词模板">
+                  <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M7 4.5h7l3 3V19.5H7Zm7 0v3h3" />
+                    <path d="M9.25 11.25h5.5M9.25 14.5h5.5" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div id="promptPresetMenu" class="preset-menu hidden"></div>
+            <textarea id="promptInput" class="prompt-input" placeholder="描述您想要生成的画面..."></textarea>
+            <label id="negativePromptLabel" for="negativePromptInput" class="section-label secondary-label">反向提示词 (Negative Prompt)</label>
+            <input id="negativePromptInput" class="field-input" type="text" placeholder="不希望出现的内容..." />
+          </section>
+
+          <section class="section-block parameter-section">
+            <div class="parameter-grid">
+              <label id="sizeField" class="form-field">
+                <span class="form-label">尺寸</span>
+                <div class="select-wrap">
+                  <select id="sizeInput">
+                    <option value="auto">自动</option>
+                    <option value="1024x1024">1024 x 1024</option>
+                    <option value="1536x1024">1536 x 1024</option>
+                    <option value="1024x1536">1024 x 1536</option>
+                    <option value="2048x2048">2048 x 2048</option>
+                    <option value="2048x1152">2048 x 1152</option>
+                    <option value="1152x2048">1152 x 2048</option>
+                  </select>
+                </div>
+              </label>
+              <label class="form-field">
+                <span class="form-label">质量</span>
+                <div class="select-wrap">
+                  <select id="qualityInput">
+                    <option value="auto">自动</option>
+                    <option value="low">低</option>
+                    <option value="medium">标准</option>
+                    <option value="high">高清</option>
+                  </select>
+                </div>
+              </label>
+              <label class="form-field slider-field">
+                <span class="form-label">数量: <strong id="countValue">1</strong></span>
+                <input id="countInput" type="range" min="1" max="10" step="1" value="1" />
+              </label>
+              <label class="form-field">
+                <span class="form-label">格式</span>
+                <div class="select-wrap">
+                  <select id="formatInput">
+                    <option value="png">PNG</option>
+                    <option value="jpeg">JPEG</option>
+                    <option value="webp">WEBP</option>
+                  </select>
+                </div>
+              </label>
+            </div>
+            <label class="checkbox-line" for="fitSelectionInput">
+              <input id="fitSelectionInput" type="checkbox" checked />
+              <span>贴合当前选区</span>
+            </label>
+          </section>
+
+          <section id="outpaintControls" class="section-block outpaint-panel hidden">
+            <div class="section-header">
+              <div class="minor-title">扩图边距</div>
+              <button id="matchDocumentBtn" class="mini-button" type="button">匹配文档</button>
+            </div>
+            <div class="outpaint-compass" aria-label="扩图像素">
+              <label class="form-field"><span class="form-label">上</span><input id="padTopInput" type="number" min="0" max="1600" value="0" /></label>
+              <label class="form-field"><span class="form-label">右</span><input id="padRightInput" type="number" min="0" max="1600" value="256" /></label>
+              <label class="form-field"><span class="form-label">下</span><input id="padBottomInput" type="number" min="0" max="1600" value="0" /></label>
+              <label class="form-field"><span class="form-label">左</span><input id="padLeftInput" type="number" min="0" max="1600" value="256" /></label>
+              <div class="outpaint-center" aria-hidden="true">
+                <svg class="ui-icon" viewBox="0 0 24 24"><path d="M4.5 6.5h15v11h-15z" /><path d="m7.5 15 3-3 2.2 2.2 2.6-3.4 2.2 4.2" /></svg>
+              </div>
+            </div>
+            <label class="context-slider">
+              <span class="form-label">Denoising <strong>0.75</strong></span>
+              <input type="range" min="0" max="1" step="0.01" value="0.75" disabled />
+            </label>
+          </section>
+
+          <section class="section-block output-panel">
+            <div class="output-head">
+              <div class="output-tabs" id="outputTabs">
+                <button class="is-active" type="button" data-output="results">
+                  <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5.5h12v13H6z" /><path d="m8.5 14 2.5-2.5 1.9 1.9 2.6-3.4" /></svg>
+                  <span>结果</span><span id="resultCount" class="tab-count">0</span>
+                </button>
+                <button type="button" data-output="history">
+                  <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6.5a5.5 5.5 0 1 1-5.22 7.2" /><path d="M6 4.5v3.5h3.5" /><path d="M12 8.5v4l2.5 1.5" /></svg>
+                  <span>历史</span>
+                </button>
+              </div>
+              <div id="historyActions" class="history-toolbar hidden">
+                <button id="loadHistoryBtn" class="mini-button" type="button">加载</button>
+                <button id="clearHistoryBtn" class="mini-button" type="button">清空历史</button>
+              </div>
+            </div>
+            <div class="output-body">
+              <div id="selectedPreview" class="selected-preview hidden"></div>
+              <div id="resultGrid" class="thumb-grid"><div class="thumb-placeholder"></div><div class="thumb-placeholder"></div><div class="thumb-placeholder"></div><div class="thumb-placeholder"></div><div class="thumb-placeholder"></div><div class="thumb-placeholder"></div></div>
+              <div id="historyGrid" class="thumb-grid hidden"><div class="thumb-placeholder is-history"></div><div class="thumb-placeholder is-history"></div><div class="thumb-placeholder is-history"></div><div class="thumb-placeholder is-history"></div><div class="thumb-placeholder is-history"></div><div class="thumb-placeholder is-history"></div></div>
+            </div>
+          </section>
+        </div>
+
+        <footer class="bottom-dock">
+          <button id="generateBtn" class="primary-button" type="button"><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3.5 7 13h4l-1 7.5L17 11h-4l.01-7.5Z" /></svg><span id="generateBtnLabel">生成</span></button>
+          <div class="secondary-actions">
+            <button id="importSelectedBtn" class="secondary-button" type="button" disabled><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5v9" /><path d="m8.75 10.5 3.25 3.25 3.25-3.25" /><path d="M5.5 18.5h13" /></svg><span>导入</span></button>
+            <button id="clearResultsBtn" class="ghost-button" type="button"><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7.5h14M9 7.5V5h6v2.5M8.5 10v7M12 10v7M15.5 10v7M7.5 7.5l.7 11h7.6l.7-11" /></svg><span>清空</span></button>
+          </div>
+          <div id="progressTrack" class="progress-track hidden"><div id="progressFill" class="progress-fill"></div></div>
+          <div class="status-row"><span id="statusDot" class="status-dot" aria-hidden="true"></span><span id="statusBar" class="status-text">就绪</span></div>
+        </footer>
+      </section>
+
+      <section id="settingsView" class="settings-view hidden">
+        <header class="settings-header">
+          <button id="settingsBackBtn" class="icon-button back-button" type="button" title="返回" aria-label="返回"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5" /></svg></button>
+          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.20</span></div>
+        </header>
+        <div class="settings-scroll">
+          <section class="settings-group">
+            <div class="group-title">API Configuration</div>
+            <label class="form-field"><span class="field-label">Base URL</span><input id="baseUrlInput" type="text" placeholder="http://127.0.0.1:49456/v1" /></label>
+            <label class="form-field"><span class="field-label">API Key</span><div class="input-with-action"><input id="apiKeyInput" type="password" placeholder="sk-..." /><button id="apiKeyVisibilityBtn" class="field-action icon-button" type="button" title="显示 API Key" aria-label="显示 API Key"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.75 12s3.2-5.25 9.25-5.25S21.25 12 21.25 12s-3.2 5.25-9.25 5.25S2.75 12 2.75 12Z" /><circle cx="12" cy="12" r="2.6" /><path d="M4.5 19.5 19.5 4.5" /></svg></button></div></label>
+            <label class="form-field"><span class="field-label">Model ID</span><input id="modelInput" type="text" value="gpt-image-2" /></label>
+          </section>
+          <section class="settings-group">
+            <div class="group-title">Endpoints</div>
+            <label class="form-field"><span class="field-label">Image Gen Path</span><input id="generationPathInput" type="text" value="/images/generations" /></label>
+            <label class="form-field"><span class="field-label">Edit Path</span><input id="editPathInput" type="text" value="/images/edits" /></label>
+          </section>
+        </div>
+        <footer class="settings-footer">
+          <div class="settings-status-row"><span id="settingsStatusDot" class="status-dot" aria-hidden="true"></span><span id="settingsStatusBar" class="status-text">就绪</span></div>
+          <div class="settings-actions"><button id="testConnectionBtn" class="secondary-button" type="button">测试连接</button><button id="saveSettingsBtn" class="primary-button" type="button">保存配置</button></div>
+        </footer>
+      </section>
+    </main>
+  </body>
+</html>

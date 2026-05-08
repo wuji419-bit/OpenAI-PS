@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DALL-E UXP - Outpaint</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-tertiary-container": "#ffd1ab",
+                        "primary": "#99cbff",
+                        "on-primary-fixed": "#001d34",
+                        "surface-bright": "#393939",
+                        "surface-container-lowest": "#0e0e0e",
+                        "inverse-primary": "#0c629b",
+                        "surface-variant": "#353535",
+                        "secondary-fixed-dim": "#c8c6c6",
+                        "on-secondary-container": "#b6b5b4",
+                        "tertiary-fixed-dim": "#ffb875",
+                        "on-primary-container": "#beddff",
+                        "surface-container-highest": "#353535",
+                        "error-container": "#93000a",
+                        "on-primary": "#003355",
+                        "surface-container-high": "#2a2a2a",
+                        "inverse-on-surface": "#303030",
+                        "tertiary-fixed": "#ffdcc0",
+                        "tertiary": "#ffb875",
+                        "outline": "#8b919b",
+                        "on-error-container": "#ffdad6",
+                        "error": "#ffb4ab",
+                        "surface-dim": "#131313",
+                        "secondary-container": "#474747",
+                        "on-secondary-fixed": "#1b1c1c",
+                        "primary-container": "#0e639c",
+                        "surface": "#131313",
+                        "on-tertiary-fixed-variant": "#6b3b00",
+                        "inverse-surface": "#e4e2e1",
+                        "surface-tint": "#99cbff",
+                        "surface-container-low": "#1b1c1c",
+                        "tertiary-container": "#8e5000",
+                        "on-secondary-fixed-variant": "#474747",
+                        "on-secondary": "#303030",
+                        "secondary": "#c8c6c6",
+                        "secondary-fixed": "#e4e2e2",
+                        "on-tertiary-fixed": "#2d1600",
+                        "on-primary-fixed-variant": "#004a78",
+                        "on-tertiary": "#4b2800",
+                        "on-error": "#690005",
+                        "surface-container": "#1f2020",
+                        "on-surface-variant": "#c1c7d1",
+                        "primary-fixed-dim": "#99cbff",
+                        "outline-variant": "#414750",
+                        "on-background": "#e4e2e1",
+                        "background": "#131313",
+                        "primary-fixed": "#cfe5ff",
+                        "on-surface": "#e4e2e1"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "margin-x": "12px",
+                        "margin-y": "8px",
+                        "gutter": "8px",
+                        "component-gap": "4px",
+                        "unit": "4px"
+                    },
+                    "fontFamily": {
+                        "input-text": ["Inter"],
+                        "body-md": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "headline-sm": ["Inter"]
+                    },
+                    "fontSize": {
+                        "input-text": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+                        "body-md": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+                        "label-caps": ["11px", { "lineHeight": "14px", "letterSpacing": "0.05em", "fontWeight": "700" }],
+                        "headline-sm": ["14px", { "lineHeight": "20px", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        /* Custom scrollbar for utilitarian look */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #131313;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #474747;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #8b919b;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface flex justify-center items-center h-screen overflow-hidden">
+<div class="w-[546px] h-[1082px] flex flex-col bg-surface border border-outline-variant relative overflow-hidden">
+<header class="bg-[#323232] docked full-width top-0 border-b border-b border-[#454545] flex justify-between items-center h-8 px-3 w-full shrink-0">
+<div class="text-xs font-bold text-[#E1E1E1] uppercase tracking-widest cursor-default active:opacity-70">
+                DALL-E UXP
+            </div>
+<div class="flex gap-2">
+<span class="material-symbols-outlined text-[#0E639C] text-[16px] cursor-default active:opacity-70">fiber_manual_record</span>
+<span class="material-symbols-outlined text-[#8E8E8E] hover:text-white transition-colors text-[16px] cursor-default active:opacity-70">settings</span>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden">
+<nav class="bg-[#252525] h-full border-r border-r border-[#454545] flex flex-col w-12 h-full shrink-0">
+<div class="flex flex-col items-center py-4 gap-4 w-full">
+<button class="flex flex-col items-center justify-center w-full py-2 text-[#B5B5B5] hover:bg-[#323232] transition-all duration-150" title="Generate">
+<span class="material-symbols-outlined text-[20px] mb-1">auto_awesome</span>
+<span class="font-inter text-[10px] uppercase font-bold">Generate</span>
+</button>
+<button class="flex flex-col items-center justify-center w-full py-2 text-[#B5B5B5] hover:bg-[#323232] transition-all duration-150" title="Variations">
+<span class="material-symbols-outlined text-[20px] mb-1">layers</span>
+<span class="font-inter text-[10px] uppercase font-bold">Variations</span>
+</button>
+<button class="flex flex-col items-center justify-center w-full py-2 bg-[#454545] text-white border-l-2 border-[#0E639C] transition-all duration-150" title="Edit">
+<span class="material-symbols-outlined text-[20px] mb-1">brush</span>
+<span class="font-inter text-[10px] uppercase font-bold">Edit</span>
+</button>
+</div>
+</nav>
+<main class="flex-1 flex flex-col overflow-y-auto pb-16">
+<div class="p-margin-x flex flex-col gap-margin-y border-b border-outline-variant bg-surface-container-low">
+<h1 class="font-headline-sm text-headline-sm text-on-surface">Canvas Mode</h1>
+<div class="flex w-full h-7 rounded border border-outline-variant overflow-hidden">
+<button class="flex-1 bg-surface-container text-on-surface-variant font-body-md text-body-md border-r border-outline-variant hover:bg-surface-container-highest transition-colors">Inpaint</button>
+<button class="flex-1 bg-surface-variant text-on-surface font-body-md text-body-md font-medium shadow-[inset_0_1px_3px_rgba(0,0,0,0.2)]">Outpaint</button>
+</div>
+</div>
+<div class="p-margin-x flex flex-col gap-8">
+<section class="flex flex-col gap-component-gap mt-4">
+<label class="font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant pb-1 mb-4">EXPANSION PIXELS</label>
+<div class="grid grid-cols-3 grid-rows-3 gap-2 w-56 mx-auto mt-2">
+<div class="col-start-2 row-start-1">
+<input class="w-full h-8 bg-surface-container-high border border-outline-variant text-on-surface font-input-text text-input-text text-center rounded-[2px] focus:border-primary focus:ring-0 focus:outline-none" type="number" value="256"/>
+</div>
+<div class="col-start-1 row-start-2">
+<input class="w-full h-8 bg-surface-container-high border border-outline-variant text-on-surface font-input-text text-input-text text-center rounded-[2px] focus:border-primary focus:ring-0 focus:outline-none" type="number" value="0"/>
+</div>
+<div class="col-start-2 row-start-2 flex items-center justify-center text-outline-variant">
+<span class="material-symbols-outlined text-[28px]">image</span>
+</div>
+<div class="col-start-3 row-start-2">
+<input class="w-full h-8 bg-surface-container-high border border-outline-variant text-on-surface font-input-text text-input-text text-center rounded-[2px] focus:border-primary focus:ring-0 focus:outline-none" type="number" value="256"/>
+</div>
+<div class="col-start-2 row-start-3">
+<input class="w-full h-8 bg-surface-container-high border border-outline-variant text-on-surface font-input-text text-input-text text-center rounded-[2px] focus:border-primary focus:ring-0 focus:outline-none" type="number" value="0"/>
+</div>
+</div>
+<div class="flex justify-center mt-6">
+<button class="h-8 px-4 border border-outline-variant text-on-surface-variant font-body-md text-[11px] rounded-[2px] hover:bg-surface-container transition-colors flex items-center gap-1">
+<span class="material-symbols-outlined text-[16px]">aspect_ratio</span> Match Document
+                            </button>
+</div>
+</section>
+<section class="flex flex-col gap-component-gap">
+<label class="font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant pb-1 mb-2">SETTINGS</label>
+<div class="flex items-center gap-3">
+<span class="font-body-md text-body-md text-on-surface w-20">Denoising</span>
+<input class="flex-1 h-1 bg-surface-container-high appearance-none rounded focus:outline-none [&amp;::-webkit-slider-thumb]:appearance-none [&amp;::-webkit-slider-thumb]:w-3 [&amp;::-webkit-slider-thumb]:h-3 [&amp;::-webkit-slider-thumb]:bg-secondary [&amp;::-webkit-slider-thumb]:rounded-sm" max="100" min="0" type="range" value="75"/>
+<input class="w-12 h-6 bg-surface-container-high border border-outline-variant text-on-surface font-input-text text-input-text text-center rounded-[2px] focus:border-primary focus:ring-0 focus:outline-none" type="text" value="0.75"/>
+</div>
+</section>
+<section class="flex flex-col gap-component-gap">
+<label class="font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant pb-1 mb-2">PROMPT</label>
+<textarea class="w-full h-24 bg-surface-container-high border border-outline-variant text-on-surface font-input-text text-input-text p-3 rounded-[2px] resize-none focus:border-primary focus:ring-0 focus:outline-none" placeholder="Describe what to add in the expanded area..."></textarea>
+</section>
+<section class="flex flex-col gap-component-gap">
+<label class="font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant pb-1 mb-2">NEGATIVE PROMPT</label>
+<textarea class="w-full h-16 bg-surface-container-high border border-outline-variant text-on-surface font-input-text text-input-text p-3 rounded-[2px] resize-none focus:border-primary focus:ring-0 focus:outline-none" placeholder="Elements to avoid..."></textarea>
+</section>
+<section class="flex flex-col gap-component-gap mt-6 flex-1">
+<div class="flex justify-between items-end border-b border-outline-variant pb-1 mb-4">
+<label class="font-label-caps text-label-caps text-on-surface-variant">RESULTS</label>
+<span class="font-body-md text-[10px] text-outline-variant">4 Variations</span>
+</div>
+<div class="grid grid-cols-2 gap-4 flex-1">
+<div class="aspect-square bg-surface-container-highest border border-outline-variant rounded-[2px] flex items-center justify-center relative group cursor-pointer hover:border-primary transition-colors">
+<img class="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity" data-alt="extended landscape view of a misty mountain range with dark pine trees in the foreground, moody atmospheric lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCmm3MvgM0n6YM6Vq2pMpP03ZqgWDsxSp_j77vphTqdc8T1v7ForH7lyXc3nGKLHIBNPHSlWOBRfmat6t25wbBXRFKI2EuuCSp6grFB2goC_-AbtiVJFHr-rtenA__FQalsgMN5vD90sg5HtUoq4Tmo1xa77-ei3LkOjd40TsjuOt10OSE_L6ZHNYR16sd-G2foO_Dt8QKJ0rkCJWHuZjFFODJZH6oGnwyA7O84P_dkzmppUcNzbdmQz-_uKUHQOMHNFBjcHrKWKQLC"/>
+<div class="absolute inset-0 border-2 border-primary opacity-0 group-hover:opacity-100 transition-opacity rounded-[2px] pointer-events-none"></div>
+</div>
+<div class="aspect-square bg-surface-container-high border border-outline-variant rounded-[2px] flex items-center justify-center border-dashed">
+<span class="material-symbols-outlined text-outline-variant text-[32px]">hourglass_empty</span>
+</div>
+<div class="aspect-square bg-surface-container-high border border-outline-variant rounded-[2px] flex items-center justify-center border-dashed"></div>
+<div class="aspect-square bg-surface-container-high border border-outline-variant rounded-[2px] flex items-center justify-center border-dashed"></div>
+</div>
+</section>
+</div>
+</main>
+</div>
+<footer class="bg-[#323232] fixed bottom-0 w-full border-t border-t border-[#454545] flex justify-end gap-2 p-3 w-full shrink-0 z-10 w-[546px]">
+<span class="absolute left-3 top-1/2 -translate-y-1/2 font-inter text-[11px] text-[#8E8E8E]">v1.0.4 Connected</span>
+<button class="border border-[#454545] text-[#E1E1E1] px-3 py-1 rounded-sm font-inter text-[11px] hover:brightness-110 active:scale-[0.97] transition-transform">
+                Clear
+            </button>
+<button class="border border-[#454545] text-[#E1E1E1] px-3 py-1 rounded-sm font-inter text-[11px] hover:brightness-110 active:scale-[0.97] transition-transform">
+                Import
+            </button>
+<button class="bg-[#0E639C] text-white px-3 py-1 rounded-sm font-inter text-[11px] font-medium hover:brightness-110 active:scale-[0.97] transition-transform shadow-[0_1px_2px_rgba(0,0,0,0.3)]">
+                Generate
+            </button>
+</footer>
+</div>
+</body></html>

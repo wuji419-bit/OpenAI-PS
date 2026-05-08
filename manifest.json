@@ -1,0 +1,66 @@
+{
+  "id": "com.local.openai.photoshop.generator",
+  "name": "OpenAI Photoshop Generator",
+  "version": "0.1.20",
+  "manifestVersion": 5,
+  "host": {
+    "app": "PS",
+    "minVersion": "24.0.0"
+  },
+  "main": "index.html",
+  "requiredPermissions": {
+    "allowCodeGenerationFromStrings": false,
+    "network": {
+      "domains": "all"
+    },
+    "localFileSystem": "request",
+    "clipboard": "readAndWrite"
+  },
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "openaiPanel",
+      "label": {
+        "default": "OpenAI 图片",
+        "zh-CN": "OpenAI 图片",
+        "en-US": "OpenAI Image"
+      },
+      "minimumSize": {
+        "width": 320,
+        "height": 460
+      },
+      "maximumSize": {
+        "width": 1200,
+        "height": 10000
+      },
+      "preferredDockedSize": {
+        "width": 400,
+        "height": 920
+      },
+      "preferredFloatingSize": {
+        "width": 460,
+        "height": 960
+      },
+      "icons": [
+        {
+          "width": 23,
+          "height": 23,
+          "path": "assets/panel@1x.png",
+          "scale": [1, 2],
+          "theme": ["all"],
+          "species": ["chrome"]
+        }
+      ]
+    }
+  ],
+  "icons": [
+    {
+      "width": 48,
+      "height": 48,
+      "path": "assets/plugin@1x.png",
+      "scale": [1, 2],
+      "theme": ["all"],
+      "species": ["pluginList"]
+    }
+  ]
+}

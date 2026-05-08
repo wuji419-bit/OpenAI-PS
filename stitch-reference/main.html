@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>OpenAI 图片</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-container-highest": "#353535",
+                        "inverse-surface": "#e4e2e1",
+                        "on-error": "#690005",
+                        "on-tertiary-fixed": "#2d1600",
+                        "on-tertiary-container": "#ffd1ab",
+                        "on-secondary": "#303030",
+                        "inverse-on-surface": "#303030",
+                        "primary": "#99cbff",
+                        "on-primary-container": "#beddff",
+                        "surface": "#131313",
+                        "surface-container-high": "#2a2a2a",
+                        "on-surface-variant": "#c1c7d1",
+                        "primary-fixed": "#cfe5ff",
+                        "on-background": "#e4e2e1",
+                        "on-tertiary": "#4b2800",
+                        "surface-dim": "#131313",
+                        "surface-variant": "#353535",
+                        "on-primary": "#003355",
+                        "outline-variant": "#414750",
+                        "inverse-primary": "#0c629b",
+                        "surface-tint": "#99cbff",
+                        "secondary": "#c8c6c6",
+                        "error": "#ffb4ab",
+                        "primary-container": "#0e639c",
+                        "surface-container": "#1f2020",
+                        "secondary-fixed-dim": "#c8c6c6",
+                        "tertiary-fixed-dim": "#ffb875",
+                        "primary-fixed-dim": "#99cbff",
+                        "on-surface": "#e4e2e1",
+                        "on-secondary-fixed-variant": "#474747",
+                        "secondary-container": "#474747",
+                        "surface-container-lowest": "#0e0e0e",
+                        "on-tertiary-fixed-variant": "#6b3b00",
+                        "on-secondary-container": "#b6b5b4",
+                        "outline": "#8b919b",
+                        "on-secondary-fixed": "#1b1c1c",
+                        "on-primary-fixed": "#001d34",
+                        "on-error-container": "#ffdad6",
+                        "on-primary-fixed-variant": "#004a78",
+                        "secondary-fixed": "#e4e2e2",
+                        "tertiary": "#ffb875",
+                        "surface-container-low": "#1b1c1c",
+                        "tertiary-container": "#8e5000",
+                        "tertiary-fixed": "#ffdcc0",
+                        "surface-bright": "#393939",
+                        "error-container": "#93000a",
+                        "background": "#131313"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "component-gap": "4px",
+                        "gutter": "8px",
+                        "unit": "4px",
+                        "margin-y": "12px",
+                        "margin-x": "16px"
+                    },
+                    "fontFamily": {
+                        "input-text": ["Inter"],
+                        "headline-sm": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "body-md": ["Inter"]
+                    },
+                    "fontSize": {
+                        "input-text": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+                        "headline-sm": ["14px", { "lineHeight": "20px", "fontWeight": "600" }],
+                        "label-caps": ["11px", { "lineHeight": "14px", "letterSpacing": "0.05em", "fontWeight": "700" }],
+                        "body-md": ["12px", { "lineHeight": "16px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        /* Custom scrollbar for high-density look */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #252525;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #454545;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555555;
+        }
+        /* Range slider styling */
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 8px;
+            width: 8px;
+            background: #e4e2e1;
+            cursor: pointer;
+            border-radius: 0;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 2px;
+            cursor: pointer;
+            background: #454545;
+        }
+    </style>
+</head>
+<body class="bg-[#323232] text-on-surface flex flex-col font-input-text text-input-text overflow-hidden antialiased relative mx-auto shadow-2xl" style="width: 546px; height: 1082px;">
+<!-- TopAppBar -->
+<header class="flex flex-col w-full px-4 py-3 gap-3 bg-[#323232] border-b border-[#454545]">
+<div class="flex items-center justify-between">
+<h1 class="text-[13px] font-bold text-gray-100 flex items-center gap-1.5 before:w-2 before:h-2 before:bg-green-500 before:rounded-full font-['Inter'] leading-tight tracking-wider">OpenAI 图片</h1>
+<div class="flex items-center gap-2">
+<button class="text-gray-400 hover:text-gray-200 hover:bg-[#454545] transition-colors p-1.5 rounded-sm flex items-center justify-center">
+<span class="material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' 0;">settings</span>
+</button>
+</div>
+</div>
+<!-- Mode Segmented Control -->
+<nav class="flex w-full gap-1 p-0.5 bg-[#252525] border border-[#454545] rounded-sm">
+<button class="flex-1 py-1.5 text-center font-['Inter'] text-[12px] font-medium text-[#0E639C] bg-[#454545] rounded-sm">文生图</button>
+<button class="flex-1 py-1.5 text-center font-['Inter'] text-[12px] font-medium text-gray-400 hover:text-gray-200 hover:bg-[#454545] transition-colors rounded-sm">参考图</button>
+<button class="flex-1 py-1.5 text-center font-['Inter'] text-[12px] font-medium text-gray-400 hover:text-gray-200 hover:bg-[#454545] transition-colors rounded-sm">选区重绘</button>
+<button class="flex-1 py-1.5 text-center font-['Inter'] text-[12px] font-medium text-gray-400 hover:text-gray-200 hover:bg-[#454545] transition-colors rounded-sm">扩图</button>
+</nav>
+</header>
+<!-- Main Content Area -->
+<main class="flex-1 flex flex-col overflow-y-auto px-4 py-4 gap-4">
+<!-- Prompt Section -->
+<section class="flex flex-col gap-1.5">
+<div class="flex justify-between items-end mb-1">
+<label class="font-label-caps text-label-caps text-gray-400 uppercase">提示词 (Prompt)</label>
+<div class="flex gap-1.5">
+<button class="p-1.5 text-gray-400 hover:text-gray-200 hover:bg-[#454545] rounded-sm border border-transparent hover:border-[#454545] transition-colors flex items-center justify-center" title="获取选区">
+<span class="material-symbols-outlined text-[16px]">straighten</span>
+</button>
+<button class="p-1.5 text-gray-400 hover:text-gray-200 hover:bg-[#454545] rounded-sm border border-transparent hover:border-[#454545] transition-colors flex items-center justify-center" title="清空">
+<span class="material-symbols-outlined text-[16px]">delete</span>
+</button>
+<button class="p-1.5 text-gray-400 hover:text-gray-200 hover:bg-[#454545] rounded-sm border border-transparent hover:border-[#454545] transition-colors flex items-center justify-center" title="模板">
+<span class="material-symbols-outlined text-[16px]">assignment</span>
+</button>
+</div>
+</div>
+<textarea class="w-full h-[140px] bg-[#252525] border border-[#454545] rounded-sm p-2.5 text-on-surface focus:outline-none focus:border-primary-container resize-none font-input-text text-[13px]" placeholder="描述您想要生成的画面..."></textarea>
+<label class="font-label-caps text-label-caps text-gray-400 uppercase mt-3">反向提示词 (Negative Prompt)</label>
+<input class="w-full h-[40px] bg-[#252525] border border-[#454545] rounded-sm px-2.5 text-on-surface focus:outline-none focus:border-primary-container font-input-text text-[13px]" placeholder="不希望出现的内容..." type="text"/>
+</section>
+<!-- Parameters Section -->
+<section class="flex flex-col gap-3 mt-2 pt-4 border-t border-[#454545]">
+<div class="grid grid-cols-2 gap-x-4 gap-y-3">
+<!-- Row 1 -->
+<div class="flex flex-col gap-1.5">
+<label class="font-label-caps text-label-caps text-gray-400 uppercase">尺寸</label>
+<select class="w-full h-[28px] bg-[#252525] border border-[#454545] rounded-sm px-2 text-on-surface focus:outline-none focus:border-primary-container text-[12px]">
+<option>1024x1024</option>
+<option>1024x1792</option>
+<option>1792x1024</option>
+</select>
+</div>
+<div class="flex flex-col gap-1.5">
+<label class="font-label-caps text-label-caps text-gray-400 uppercase">质量</label>
+<select class="w-full h-[28px] bg-[#252525] border border-[#454545] rounded-sm px-2 text-on-surface focus:outline-none focus:border-primary-container text-[12px]">
+<option>高清</option>
+<option>标准</option>
+</select>
+</div>
+<!-- Row 2 -->
+<div class="flex flex-col gap-1.5">
+<label class="font-label-caps text-label-caps text-gray-400 uppercase">数量: 1</label>
+<div class="flex items-center h-[28px]">
+<input class="w-full h-2 bg-transparent appearance-none" max="4" min="1" type="range" value="1"/>
+</div>
+</div>
+<div class="flex flex-col gap-1.5">
+<label class="font-label-caps text-label-caps text-gray-400 uppercase">格式</label>
+<select class="w-full h-[28px] bg-[#252525] border border-[#454545] rounded-sm px-2 text-on-surface focus:outline-none focus:border-primary-container text-[12px]">
+<option>PNG</option>
+<option>JPEG</option>
+</select>
+</div>
+</div>
+<label class="flex items-center gap-2 mt-2 cursor-pointer group">
+<div class="w-4 h-4 border border-[#454545] bg-[#252525] rounded-sm flex items-center justify-center group-hover:border-primary-container">
+<span class="material-symbols-outlined text-[12px] text-primary-container" style="font-variation-settings: 'FILL' 1;">check</span>
+</div>
+<span class="text-[12px] text-gray-300">贴合当前选区</span>
+</label>
+</section>
+<!-- Main Area: Tabs & Grid -->
+<section class="flex flex-col mt-4 flex-1">
+<div class="flex border-b border-[#454545] mb-3">
+<button class="px-4 py-2 font-['Inter'] text-[12px] text-[#0E639C] border-b-2 border-[#0E639C] bg-[#454545] flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[16px]">image</span>
+                    结果 (12)
+                </button>
+<button class="px-4 py-2 font-['Inter'] text-[12px] text-gray-500 hover:bg-[#323232] transition-all duration-150 flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[16px]">history</span>
+                    历史
+                </button>
+</div>
+<div class="grid grid-cols-3 gap-2 overflow-y-auto pr-1 pb-4 flex-1 content-start">
+<img class="w-full aspect-square object-cover border border-[#454545] rounded-sm hover:border-primary-container cursor-pointer" data-alt="a majestic mountain peak at sunrise with orange light hitting the snow" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCt7SO2yaafvKUpHCC1kk5S7IAD8CQ-2Ma5aWcACj57yGj5cquQICo5go-9JbRdcQ1Dpk5bB5uCHIKR5_o6taHDWF0ZouMWxWjpfYwcvfEkLVakgA_jQbjZ9u0pY2NuODV_F42VTzOLa6HxqHelRkXa65yEv4giHtU5sjudtya8L4r9u8EAMS_n20BEuHH2rSB63e_TpFBW302Ol2Tu8GTU10JLL6Yb54hTmczkFQmXOQnaGneu8m6gwpaB-CGkaFIFvp3NZj7zzb-L"/>
+<img class="w-full aspect-square object-cover border border-[#454545] rounded-sm hover:border-primary-container cursor-pointer" data-alt="a serene alpine lake reflecting the surrounding dark pine forest" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCJISjmQQKbOBc8Ug2j1fGSdVIIg_MnKNB77Q-95ye9_bg42gVhyuW8PrxoanQiPJVgaIdWcEVRp-ouftxEcBAuH0GO9yMLVNpdE6CfQHNpM7P3lhIRon8GpAmpshn-E4-bfqWDaasNS4v_RAQDMvZH_kFH0tZ7ivJIr7bEcCWbCAVvVx8-DV14Bz-OG9itJA00GZJPeM_NNaSd3655kq2dcpJfNBDk4RLwPi3B7HNyD2sqXT7IWgQ5kLvu8ifNAvtLSkBp7kXlTtHK"/>
+<img class="w-full aspect-square object-cover border border-primary-container rounded-sm cursor-pointer" data-alt="close up of colorful wildflowers blooming in a high altitude meadow" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC5l8vqhTb3U8sWQO8Y01oZUkgtAyTDEFgH8zWbk5upj6-T1vkUnJPGa5t0Mwz904bJDN-IIxN52tNW_R1qmDPylPRYZvWmTOtjhEdVmLs_bzZOodevS7xYunDRB3SBy5x2XjJx0uGw64SIJVnIVZN9d3QlhfdUNXX1LOPCRsuVoNSlHhx-i5b-NenV6U9UGefnKc248_-7U0NlckpmgrbMG9VnvAJEAaRrtV2wO_2tH-r2hMw0tgEJHjFr7zxkGvYGwGt4oO_N_g0A"/>
+<img class="w-full aspect-square object-cover border border-[#454545] rounded-sm hover:border-primary-container cursor-pointer" data-alt="abstract flowing river patterns from above in icy blue tones" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA92TCfyjJhYhKeKbt50M2Gs6fTQs5aAnLeE8YnW4KSYV060XIjW9vLsv97mPEWuSPtxEjxDoxhINbkdCsD6mZBOZyE8zQitvVkodIpYwK2OikgxGq9sj3MEgY1QE9-yB_DDroBHDWky__VjB59BI1CBNDya-19x3FWCmvlZOfGN6YK1aT-MoaFAt0mrU_3GNsTzV0O0-NeQAcu79Lz5zcnbRpi9VfyBDX6T8gzcO1hv-sRivprI3R8nlmqjlorxnqYbObrExCnGb0I"/>
+<img class="w-full aspect-square object-cover border border-[#454545] rounded-sm hover:border-primary-container cursor-pointer" data-alt="dramatic stormy clouds over a desolate rocky landscape" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBhHvzwoN-du5YeV1KkBo6RLYGlQnMn8ivwwPkGM6gUEP7G3b-f8MkEtD8YQ9g_-E-aOyKiVZpUhk4pXKxAxmARC0snYs_p-uKa77lOg3-Xgznsd9iDURB2H7W3Jl8v0R4QUClPXTz-agk8MiMvmyL9WvAUagGC3JSiguc515FW2233OALCTsjUtCZ7_V0pjUBk8dzZGCK0IO-siNIgNPwfrZbFiTtJl62HCMge4lfwZSc7XP_Hc9eGAsQeKKIQOfAb8Ahf2rTYRABn"/>
+<div class="w-full aspect-square bg-[#252525] border border-[#454545] border-dashed rounded-sm flex items-center justify-center text-gray-500 hover:text-gray-300 hover:border-gray-400 cursor-pointer transition-colors">
+<span class="material-symbols-outlined text-[28px]">add</span>
+</div>
+</div>
+</section>
+</main>
+<!-- BottomNavBar -->
+<footer class="absolute bottom-0 left-0 w-full z-50 flex flex-col px-4 py-3 bg-[#252525] border-t border-[#454545] gap-2.5">
+<button class="w-full h-[36px] bg-[#0E639C] hover:bg-blue-600 text-white font-semibold text-[13px] rounded-sm transition-colors flex items-center justify-center gap-1.5 active:scale-[0.98]">
+<span class="material-symbols-outlined text-[18px]">bolt</span>
+            生成
+        </button>
+<div class="flex gap-2.5">
+<button class="flex-1 h-[32px] border border-[#454545] bg-[#323232] hover:bg-[#454545] text-gray-200 text-[12px] rounded-sm transition-colors flex items-center justify-center gap-1.5">
+<span class="material-symbols-outlined text-[16px]">download</span>
+                导入
+            </button>
+<button class="flex-1 h-[32px] border border-[#454545] bg-[#323232] hover:bg-[#454545] text-gray-200 text-[12px] rounded-sm transition-colors flex items-center justify-center gap-1.5">
+<span class="material-symbols-outlined text-[16px]">delete</span>
+                清空
+            </button>
+</div>
+<div class="flex items-center gap-1.5 mt-1 justify-center">
+<div class="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
+<span class="text-[11px] text-gray-400 font-['Inter']">就绪</span>
+</div>
+</footer>
+<!-- Pad main area so content isn't hidden behind absolute footer -->
+<div class="h-[120px]"></div>
+</body></html>
