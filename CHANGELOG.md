@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.48] - 2026-05-15
+
+### Fixed
+
+- Removed the experimental feather-specific mask refinement so selection repaint uses the actual Photoshop selection/mask generically again.
+- Kept the more stable fetch transport for OpenAI-compatible image edits.
+
 ## [0.1.47] - 2026-05-14
 
 ### Fixed
