@@ -600,7 +600,10 @@ function buildPrompt(prompt, negative) {
 }
 
 function getInpaintSettings(settings) {
-  return settings;
+  return {
+    ...settings,
+    count: 1,
+  };
 }
 
 function buildImageEditPrompt(prompt, mode) {
@@ -712,13 +715,25 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
     ? `正在上传局部编辑：图像 ${formatBytes(imageBytes)}，Mask ${formatBytes(maskBytes)}`
     : `正在上传参考图：${formatBytes(imageBytes)}`);
 
-  const response = await sendRequest(buildApiUrl(settings.baseUrl, settings.editPath), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${settings.apiKey}`,
-    },
-    body: form,
-  }, maskB64 ? "局部编辑请求" : "参考图编辑请求");
+  const waitLabel = maskB64 ? "OpenAI 局部编辑" : "OpenAI 参考图编辑";
+  const waitStartedAt = Date.now();
+  const waitTimer = window.setInterval(() => {
+    const seconds = Math.max(1, Math.round((Date.now() - waitStartedAt) / 1000));
+    setStatus(`已提交 ${waitLabel}，正在等待模型返回... ${seconds}s`);
+  }, 3000);
+
+  let response;
+  try {
+    response = await sendRequest(buildApiUrl(settings.baseUrl, settings.editPath), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${settings.apiKey}`,
+      },
+      body: form,
+    }, maskB64 ? "局部编辑请求" : "参考图编辑请求");
+  } finally {
+    window.clearInterval(waitTimer);
+  }
 
   return parseOpenAIImageResponse(response);
 }

@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.37] - 2026-05-14
+
+### Changed
+
+- Selection repaint now forces a single OpenAI edit request even when the global count is higher.
+- OpenAI edit requests now update the status while waiting for the model response instead of leaving the UI at the upload message.
+
 ## [0.1.36] - 2026-05-14
 
 ### Changed
