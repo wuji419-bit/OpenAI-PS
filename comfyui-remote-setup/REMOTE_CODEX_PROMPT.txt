@@ -1,0 +1,27 @@
+Please prepare this ComfyUI machine for Photoshop local inpaint workflows.
+
+Read and follow:
+
+C:\path\to\REMOTE_CODEX_TASK.md
+
+Then run the probe script first:
+
+powershell -ExecutionPolicy Bypass -File C:\path\to\install_comfyui_inpaint_models.ps1
+
+If files are missing, install Hugging Face CLI, accept the FLUX.1 Fill dev agreement in the browser if required, log in, and run:
+
+python -m pip install -U huggingface_hub
+huggingface-cli login
+powershell -ExecutionPolicy Bypass -File C:\path\to\install_comfyui_inpaint_models.ps1 -Download
+
+Restart ComfyUI, run the probe script again, and send back:
+
+Invoke-RestMethod http://127.0.0.1:8188/system_stats
+Invoke-RestMethod http://127.0.0.1:8188/models/diffusion_models
+Invoke-RestMethod http://127.0.0.1:8188/models/text_encoders
+Invoke-RestMethod http://127.0.0.1:8188/models/vae
+Invoke-RestMethod http://127.0.0.1:8188/models/checkpoints
+
+Do not delete or overwrite existing model files. Only add missing files.
+
+Validate one official FLUX Fill inpaint workflow, one SDXL inpaint workflow if the SDXL files install successfully, and one official basic inpaint fallback workflow in ComfyUI. Return any working workflow JSON and output image paths.

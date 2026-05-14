@@ -2,7 +2,7 @@
 
 OpenAI Photoshop Generator is an open-source Adobe Photoshop UXP plugin built with Codex-assisted development. It focuses on OpenAI image generation and editing workflows inside Photoshop, without carrying over the heavy Stable Diffusion / A1111 / ComfyUI parameter surface.
 
-The plugin is designed for fast creative loops: generate a draft, use the current canvas as a reference, repaint a rectangular selection, extend canvas edges, preview results, and place selected outputs back into the active Photoshop document.
+The plugin is designed for fast creative loops: generate a draft, use the current canvas as a reference, repaint a rectangular selection, extend canvas edges, cut out transparent PNG layers, preview results, and place selected outputs back into the active Photoshop document.
 
 ![Plugin preview](stitch-reference/desktop-capture-after-v019.png)
 
@@ -11,7 +11,11 @@ The plugin is designed for fast creative loops: generate a draft, use the curren
 - Text-to-image generation through the OpenAI Image API.
 - Reference-image editing by exporting the current Photoshop document and sending it to OpenAI edits.
 - Rectangular-selection repainting with a generated same-size mask.
+- ComfyUI-backed selection repainting with Basic Inpaint, SDXL Inpaint, and FLUX Fill workflow presets.
 - Outpainting by adding top, bottom, left, and right margins before an edit request.
+- Cutout mode for exporting the active canvas or selected region to ComfyUI and placing the returned transparent PNG back at the original position.
+- RMBG subject cutout for opaque character, prop, monster, weapon, and white-background assets.
+- Optional GPT-assisted cutout strategy selection with local fallback heuristics.
 - Result preview inside the panel.
 - Import generated results into the current Photoshop document as layers.
 - Fit imported output to the active rectangular selection when appropriate.
@@ -40,6 +44,23 @@ Image edits: /images/edits
 
 `/chat/completions` is not a standard image endpoint. Use it only if your relay service intentionally maps chat requests to image base64 responses.
 
+## ComfyUI Flow
+
+The plugin can send selected regions and cutout inputs to a remote ComfyUI server. The default development URL is:
+
+```text
+ComfyUI URL: http://192.168.1.128:8188
+```
+
+Bundled workflow files live in [`comfyui-workflows/`](comfyui-workflows/):
+
+- `codex_basic_inpaint_masklock_api.json`
+- `codex_sdxl_inpaint_masklock_api.json`
+- `codex_flux_fill_inpaint_masklock_api.json`
+- `codex_transparent_png_effect_composite_api.json`
+
+For selection repainting, ComfyUI outputs are mask-locked before being returned to Photoshop, so pixels outside the selected region stay identical to the original input. For cutout, the plugin detects whether the input already has meaningful alpha; opaque subject images use RMBG on the ComfyUI machine, while effect images can use color-channel extraction.
+
 ## Repository Layout
 
 ```text
@@ -49,6 +70,8 @@ Image edits: /images/edits
 ├── src/app.js                 # Photoshop + OpenAI workflow logic
 ├── src/styles.css             # Panel styling
 ├── assets/                    # Plugin and panel icons
+├── comfyui-workflows/         # ComfyUI API workflow JSON files
+├── comfyui-remote-setup/      # Remote AI-machine setup helper notes/scripts
 ├── stitch-reference/          # UI references and smoke-test screenshots
 ├── docs/                      # Maintainer and application notes
 └── .github/                   # Issue and pull request templates
@@ -73,7 +96,7 @@ cd OpenAI-PS
 1. Open the plugin panel in Photoshop.
 2. Open settings and enter your OpenAI API key.
 3. Use the default official OpenAI image paths or configure a compatible local relay.
-4. Choose one of the workflow modes: text-to-image, reference edit, selection repaint, or outpaint.
+4. Choose one of the workflow modes: text-to-image, reference edit, selection repaint, outpaint, or cutout.
 5. Enter a prompt and generate.
 6. Preview results in the panel.
 7. Import the selected result back into Photoshop.

@@ -1,13 +1,17 @@
 # OpenAI Photoshop Generator
 
-这是一个从零写的轻量版 Photoshop UXP 插件，目标是只服务 OpenAI 图像 API，不再继承 Stable Diffusion / A1111 / ComfyUI 那套复杂参数。
+这是一个从零写的轻量版 Photoshop UXP 插件，目标是在 Photoshop 里直接完成 OpenAI 图像生成、局部重绘、扩图，以及连接 AI 电脑上的 ComfyUI 做选区重绘和透明 PNG 抠图。
 
 ## 当前功能
 
 - 文生图：输入提示词生成图片。
 - 参考图编辑：把当前 Photoshop 画布导出为参考图，再交给 OpenAI 编辑。
-- 矩形选区重绘：读取当前矩形选区，生成同尺寸 mask 后调用 OpenAI edits。
+- 矩形选区重绘：读取当前矩形选区，生成同尺寸 mask；默认可走 AI 电脑上的 ComfyUI FLUX Fill。
+- ComfyUI 局部重绘：内置 Basic Inpaint、SDXL Inpaint、FLUX Fill workflow，mask 外像素会锁回原图。
 - 扩图：按上、下、左、右边距生成扩图输入和 mask。
+- 抠图：把当前画布或选区上传到 ComfyUI，返回透明 PNG，并自动放回原位置成为新图层。
+- 主体抠图：对白底、角色、怪物、武器、道具等不带透明通道的图，默认走 ComfyUI RMBG。
+- GPT 辅助抠图：留空或 `auto` 时可先让 GPT 看图判断策略，失败时回退到本地规则。
 - 结果预览：生成结果会在面板内显示缩略图。
 - 导入图层：选中结果后可放进当前 Photoshop 文档。
 - 贴合选区：导入时可自动缩放到当前矩形选区。
@@ -16,9 +20,10 @@
 
 ## 文件位置
 
-- 开发目录：`C:\Users\Administrator\source\OpenAI-Photoshop-Plugin`
-- 打包文件：`C:\Users\Administrator\source\OpenAI-Photoshop-Plugin\dist\OpenAI-Photoshop-Generator-0.1.0.ccx`
-- ZIP 备份：`C:\Users\Administrator\source\OpenAI-Photoshop-Plugin\dist\OpenAI-Photoshop-Generator-0.1.0.zip`
+- Git 仓库：`C:\Users\Administrator\source\OpenAI-PS`
+- 当前开发同步目录：`C:\Users\Administrator\source\OpenAI-Photoshop-Plugin`
+- Photoshop 外部插件目录：`%APPDATA%\Adobe\UXP\Plugins\External\com.local.openai.photoshop.generator`
+- Photoshop 插件存储目录：`%APPDATA%\Adobe\UXP\PluginsStorage\PHSP\27\External\com.local.openai.photoshop.generator`
 
 ## 安装方式
 
@@ -60,6 +65,23 @@
 6. 选择模式，填写提示词。
 7. 点击“生成”。
 8. 在结果里点“导入”或先“选中”再“导入”。
+
+## ComfyUI 配置
+
+默认开发环境里的 AI 电脑地址：
+
+```text
+http://192.168.1.128:8188
+```
+
+仓库内置 workflow：
+
+- `comfyui-workflows/codex_basic_inpaint_masklock_api.json`
+- `comfyui-workflows/codex_sdxl_inpaint_masklock_api.json`
+- `comfyui-workflows/codex_flux_fill_inpaint_masklock_api.json`
+- `comfyui-workflows/codex_transparent_png_effect_composite_api.json`
+
+远程机器安装和校验说明在 `comfyui-remote-setup/`。
 
 ## 下一步建议
 

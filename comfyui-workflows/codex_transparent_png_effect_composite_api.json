@@ -1,0 +1,69 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "codex_ps_transparent_source_rgba.png"
+    }
+  },
+  "3": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "codex_ps_effect_layer_black_bg.png"
+    }
+  },
+  "4": {
+    "class_type": "ImageToMask",
+    "inputs": {
+      "image": [
+        "3",
+        0
+      ],
+      "channel": "red"
+    }
+  },
+  "5": {
+    "class_type": "InvertMask",
+    "inputs": {
+      "mask": [
+        "4",
+        0
+      ]
+    }
+  },
+  "6": {
+    "class_type": "PorterDuffImageComposite",
+    "inputs": {
+      "source": [
+        "3",
+        0
+      ],
+      "source_alpha": [
+        "5",
+        0
+      ],
+      "destination": [
+        "1",
+        0
+      ],
+      "destination_alpha": [
+        "1",
+        1
+      ],
+      "mode": "SRC_OVER"
+    }
+  },
+  "7": {
+    "class_type": "SaveImageWithAlpha",
+    "inputs": {
+      "images": [
+        "6",
+        0
+      ],
+      "mask": [
+        "6",
+        1
+      ],
+      "filename_prefix": "codex_ps_transparent_effect_rgba"
+    }
+  }
+}

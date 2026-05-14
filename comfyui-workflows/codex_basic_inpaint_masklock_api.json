@@ -1,0 +1,122 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "codex_ps_basic_inpaint_mask_input.png"
+    }
+  },
+  "2": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "512-inpainting-ema.safetensors"
+    }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "clean blue glass orb, soft highlight, game UI icon style",
+      "clip": [
+        "2",
+        1
+      ]
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "text, watermark, distorted border",
+      "clip": [
+        "2",
+        1
+      ]
+    }
+  },
+  "5": {
+    "class_type": "VAEEncodeForInpaint",
+    "inputs": {
+      "pixels": [
+        "1",
+        0
+      ],
+      "vae": [
+        "2",
+        2
+      ],
+      "mask": [
+        "1",
+        1
+      ],
+      "grow_mask_by": 6
+    }
+  },
+  "6": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "2",
+        0
+      ],
+      "seed": 1778419011,
+      "steps": 8,
+      "cfg": 7.0,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "positive": [
+        "3",
+        0
+      ],
+      "negative": [
+        "4",
+        0
+      ],
+      "latent_image": [
+        "5",
+        0
+      ],
+      "denoise": 1.0
+    }
+  },
+  "7": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "6",
+        0
+      ],
+      "vae": [
+        "2",
+        2
+      ]
+    }
+  },
+  "8": {
+    "class_type": "ImageCompositeMasked",
+    "inputs": {
+      "destination": [
+        "1",
+        0
+      ],
+      "source": [
+        "7",
+        0
+      ],
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "mask": [
+        "1",
+        1
+      ]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ],
+      "filename_prefix": "codex_ps_basic_inpaint_masklock"
+    }
+  }
+}

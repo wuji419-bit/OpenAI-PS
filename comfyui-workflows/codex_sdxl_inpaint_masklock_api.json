@@ -1,0 +1,137 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "codex_ps_sdxl_inpaint_mask_input.png"
+    }
+  },
+  "2": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "sd_xl_base_1.0.safetensors"
+    }
+  },
+  "3": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "sd_xl_inpainting_0.1.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "polished blue crystal button core, clean game UI asset, soft studio lighting",
+      "clip": [
+        "2",
+        1
+      ]
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "text, watermark, noisy edge",
+      "clip": [
+        "2",
+        1
+      ]
+    }
+  },
+  "6": {
+    "class_type": "InpaintModelConditioning",
+    "inputs": {
+      "positive": [
+        "4",
+        0
+      ],
+      "negative": [
+        "5",
+        0
+      ],
+      "vae": [
+        "2",
+        2
+      ],
+      "pixels": [
+        "1",
+        0
+      ],
+      "mask": [
+        "1",
+        1
+      ],
+      "noise_mask": true
+    }
+  },
+  "7": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "3",
+        0
+      ],
+      "seed": 1778419022,
+      "steps": 8,
+      "cfg": 6.0,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "6",
+        1
+      ],
+      "latent_image": [
+        "6",
+        2
+      ],
+      "denoise": 1.0
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "7",
+        0
+      ],
+      "vae": [
+        "2",
+        2
+      ]
+    }
+  },
+  "9": {
+    "class_type": "ImageCompositeMasked",
+    "inputs": {
+      "destination": [
+        "1",
+        0
+      ],
+      "source": [
+        "8",
+        0
+      ],
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "mask": [
+        "1",
+        1
+      ]
+    }
+  },
+  "10": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "9",
+        0
+      ],
+      "filename_prefix": "codex_ps_sdxl_inpaint_masklock"
+    }
+  }
+}
