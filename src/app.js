@@ -730,6 +730,7 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
         Authorization: `Bearer ${settings.apiKey}`,
       },
       body: form,
+      timeoutMs: 120000,
     }, maskB64 ? "局部编辑请求" : "参考图编辑请求");
   } finally {
     window.clearInterval(waitTimer);
@@ -1579,10 +1580,13 @@ async function parseOpenAIImageResponse(response) {
 }
 
 async function sendRequest(url, options = {}, label = "请求") {
-  const { responseType, ...fetchOptions } = options;
+  const { responseType, timeoutMs = 180000, ...fetchOptions } = options;
   try {
-    return await fetch(url, fetchOptions);
+    return await fetchWithTimeout(url, fetchOptions, timeoutMs);
   } catch (fetchError) {
+    if (fetchError?.name === "RequestTimeoutError") {
+      throw makeNetworkError(fetchError, url, label);
+    }
     if (typeof XMLHttpRequest === "undefined") {
       throw makeNetworkError(fetchError, url, label);
     }
@@ -1595,11 +1599,36 @@ async function sendRequest(url, options = {}, label = "请求") {
   }
 }
 
+function fetchWithTimeout(url, options, timeoutMs) {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return fetch(url, options);
+  }
+
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      const error = new Error(`request timeout after ${Math.round(timeoutMs / 1000)}s`);
+      error.name = "RequestTimeoutError";
+      reject(error);
+    }, timeoutMs);
+
+    fetch(url, options).then(
+      (response) => {
+        window.clearTimeout(timer);
+        resolve(response);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 function sendXhrRequest(url, options = {}) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open(options.method || "GET", url, true);
-    xhr.timeout = 180000;
+    xhr.timeout = options.timeoutMs || 180000;
     if (options.responseType) {
       xhr.responseType = options.responseType;
     }

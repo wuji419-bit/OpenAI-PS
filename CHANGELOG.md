@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.38] - 2026-05-14
+
+### Fixed
+
+- Added explicit fetch timeouts so stalled OpenAI edit proxy requests fail instead of leaving the panel in an infinite generating state.
+- Selection repaint `/images/edits` requests now time out after 120 seconds with a clear network failure message.
+
 ## [0.1.37] - 2026-05-14
 
 ### Changed
