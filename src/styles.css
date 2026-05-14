@@ -84,6 +84,19 @@ textarea {
   resize: none;
 }
 
+.settings-textarea {
+  min-height: 88px;
+  padding: 8px;
+  line-height: 16px;
+}
+
+.settings-help {
+  margin: -4px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 15px;
+}
+
 select {
   appearance: none;
   padding-right: 24px;

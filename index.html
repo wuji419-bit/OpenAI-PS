@@ -15,7 +15,7 @@
             <div class="title-inline">
               <span id="connectionBadge" class="connection-dot" aria-hidden="true" title="未配置 API Key"></span>
               <h1>OpenAI 图片</h1>
-              <span id="versionText" class="version-inline">v0.1.38</span>
+              <span id="versionText" class="version-inline">v0.1.39</span>
             </div>
             <button id="settingsToggleBtn" class="icon-button settings-entry-button" type="button" title="打开 API 设置" aria-label="打开 API 设置">
               <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -215,15 +215,19 @@
       <section id="settingsView" class="settings-view hidden">
         <header class="settings-header">
           <button id="settingsBackBtn" class="icon-button back-button" type="button" title="返回" aria-label="返回"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5" /></svg></button>
-          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.38</span></div>
+          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.39</span></div>
         </header>
         <div class="settings-scroll">
           <section class="settings-group">
             <div class="group-title">API Configuration</div>
             <label class="form-field"><span class="field-label">Base URL</span><input id="baseUrlInput" type="text" placeholder="http://127.0.0.1:49456/v1" /></label>
             <label class="form-field"><span class="field-label">API Key</span><div class="input-with-action"><input id="apiKeyInput" type="password" placeholder="sk-..." /><button id="apiKeyVisibilityBtn" class="field-action icon-button" type="button" title="显示 API Key" aria-label="显示 API Key"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.75 12s3.2-5.25 9.25-5.25S21.25 12 21.25 12s-3.2 5.25-9.25 5.25S2.75 12 2.75 12Z" /><circle cx="12" cy="12" r="2.6" /><path d="M4.5 19.5 19.5 4.5" /></svg></button></div></label>
+            <label class="form-field"><span class="field-label">Auth / API JSON</span><textarea id="authJsonInput" class="settings-textarea" placeholder="粘贴 OpenAI API Key，或包含 api_key / OPENAI_API_KEY 的 JSON"></textarea></label>
+            <p class="settings-help">支持官方 API Key 直连；不使用 id_token / refresh_token 账号登录态。</p>
+            <button id="applyAuthJsonBtn" class="secondary-button" type="button">导入并直连 OpenAI</button>
             <label class="form-field"><span class="field-label">Model ID</span><input id="modelInput" type="text" value="gpt-image-2" list="modelPresetList" /></label>
             <datalist id="modelPresetList">
+              <option value="gpt-image-1.5"></option>
               <option value="gpt-image-2"></option>
             </datalist>
             <label class="form-field"><span class="field-label">ComfyUI URL</span><input id="comfyUrlInput" type="text" value="http://192.168.1.128:8188" /></label>

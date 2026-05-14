@@ -132,6 +132,7 @@ function bindEvents() {
   });
   $("testConnectionBtn").addEventListener("click", testConnection);
   $("apiKeyVisibilityBtn").addEventListener("click", toggleApiKeyVisibility);
+  $("applyAuthJsonBtn").addEventListener("click", applyAuthJson);
 
   $("generateBtn").addEventListener("click", runGeneration);
   $("importSelectedBtn").addEventListener("click", importSelected);
@@ -213,6 +214,72 @@ function saveQuickApiKey() {
   }
   saveSettings();
   setStatus("API Key 已保存");
+}
+
+function applyAuthJson() {
+  const raw = $("authJsonInput").value.trim();
+  const apiKey = extractOpenAIApiKey(raw);
+  if (!apiKey) {
+    if (/refresh_token|id_token|access_token/i.test(raw)) {
+      setStatus("不能用账号 token 直连 OpenAI API，请粘贴 sk- 开头的 API Key");
+      return;
+    }
+    setStatus("没有识别到 OpenAI API Key");
+    return;
+  }
+
+  $("baseUrlInput").value = "https://api.openai.com/v1";
+  $("apiKeyInput").value = apiKey;
+  $("quickApiKeyInput").value = apiKey;
+  $("modelInput").value = "gpt-image-1.5";
+  $("generationPathInput").value = "/images/generations";
+  $("editPathInput").value = "/images/edits";
+  $("authJsonInput").value = "";
+  saveSettings();
+  updateKeyBadge();
+  setStatus("已切换为官方 OpenAI API 直连");
+}
+
+function extractOpenAIApiKey(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+
+  const direct = value.match(/sk-[A-Za-z0-9_-]{20,}/);
+  if (direct) return direct[0];
+
+  try {
+    const parsed = JSON.parse(value);
+    return findApiKeyInObject(parsed) || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function findApiKeyInObject(value) {
+  if (!value) return "";
+  if (typeof value === "string") {
+    const match = value.match(/sk-[A-Za-z0-9_-]{20,}/);
+    return match ? match[0] : "";
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findApiKeyInObject(item);
+      if (found) return found;
+    }
+    return "";
+  }
+  if (typeof value === "object") {
+    const preferredKeys = ["api_key", "apiKey", "OPENAI_API_KEY", "openai_api_key", "key"];
+    for (const key of preferredKeys) {
+      const found = findApiKeyInObject(value[key]);
+      if (found) return found;
+    }
+    for (const item of Object.values(value)) {
+      const found = findApiKeyInObject(item);
+      if (found) return found;
+    }
+  }
+  return "";
 }
 
 function getSettings() {

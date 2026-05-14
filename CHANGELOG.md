@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.39] - 2026-05-14
+
+### Added
+
+- Added a direct OpenAI auth JSON importer in settings.
+- The importer accepts official `sk-...` API keys directly or JSON objects containing `api_key`, `apiKey`, `OPENAI_API_KEY`, or `openai_api_key`.
+
+### Changed
+
+- Direct auth import sets Base URL to `https://api.openai.com/v1`, endpoints to `/images/generations` and `/images/edits`, and model to `gpt-image-1.5`.
+
+### Rejected
+
+- Account `id_token`, `access_token`, and `refresh_token` values are not used for OpenAI API auth; the plugin now shows a clear message when those are pasted without an API key.
+
 ## [0.1.38] - 2026-05-14
 
 ### Fixed
