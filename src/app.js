@@ -576,9 +576,26 @@ async function runGeneration() {
       items = await requestGenerations(settings, prompt);
     } else if (state.mode === "reference") {
       setProgress(18, true);
-      const image = await exportActiveDocumentAsBase64();
-      setProgress(36, true);
-      items = await requestEdits(settings, buildImageEditPrompt(prompt, "reference"), image, null);
+      const selection = await getSelectionInfo();
+      if (isSelectionValid(selection)) {
+        setStatus("正在导出选区上下文作为无 Mask 参考图...");
+        const reference = await createReferenceRegionInputs(selection, getDocumentSize(), settings.model);
+        outputSize = reference.displaySize;
+        targetRect = reference.targetRect;
+        placementRect = reference.placementRect;
+        setProgress(40, true);
+        items = await requestEdits(
+          settings,
+          buildImageEditPrompt(prompt, "referenceNoMask"),
+          reference.image,
+          null,
+          { size: reference.apiSize }
+        );
+      } else {
+        const image = await exportActiveDocumentAsBase64();
+        setProgress(36, true);
+        items = await requestEdits(settings, buildImageEditPrompt(prompt, "reference"), image, null);
+      }
     } else if (state.mode === "inpaint") {
       setProgress(15, true);
       const selection = await getSelectionInfo();
@@ -681,6 +698,12 @@ function buildImageEditPrompt(prompt, mode) {
       "Use the provided Photoshop image as the primary visual reference.",
       "Preserve the original composition, style, lighting, perspective, color palette, and texture unless the user prompt explicitly asks to change them.",
       "Make the requested change while keeping unrelated areas as close to the source image as possible.",
+    ],
+    referenceNoMask: [
+      "Use the provided Photoshop crop as an image-to-image reference edit without a mask.",
+      "Follow the user's requested change directly on the provided crop.",
+      "Preserve the original character, pose, style, lighting, line art, color palette, and unrelated details as much as possible.",
+      "When the request asks to remove an object, erase that object and fill the area naturally with the requested background or nearby visual context.",
     ],
     inpaint: [
       "Use the provided Photoshop crop as the source image.",
@@ -1847,9 +1870,15 @@ async function importSelected() {
       ? (item.placementRect || item.targetRect || liveSelection)
       : null;
     const cropRect = shouldForceCapturedSelection
-      ? (item.cropRect || item.targetRect)
+      ? item.mode === "reference" ? item.cropRect : (item.cropRect || item.targetRect)
       : shouldFit ? item.cropRect : null;
-    const layerName = item.mode === "cutout" ? "OpenAI Cutout" : shouldForceCapturedSelection ? "OpenAI Inpaint" : "OpenAI Image";
+    const layerName = item.mode === "cutout"
+      ? "OpenAI Cutout"
+      : item.mode === "reference" && shouldForceCapturedSelection
+      ? "OpenAI Reference"
+      : shouldForceCapturedSelection
+      ? "OpenAI Inpaint"
+      : "OpenAI Image";
     await placeResultAsLayer(item, placementRect, layerName, cropRect);
     setStatus(shouldForceCapturedSelection ? "已按生成时选区裁切导入" : "已导入到当前文档");
   } catch (error) {
@@ -1861,7 +1890,7 @@ async function importSelected() {
 }
 
 function isCapturedRegionResult(item) {
-  return (item?.mode === "inpaint" || item?.mode === "cutout") &&
+  return (item?.mode === "inpaint" || item?.mode === "cutout" || item?.mode === "reference") &&
     (isSelectionValid(item.placementRect) || isSelectionValid(item.targetRect));
 }
 
@@ -2125,6 +2154,22 @@ async function createInpaintInputs(selection, docSize, model) {
     mask,
     apiSize,
     displaySize: `${targetRect.width}x${targetRect.height}`,
+    targetRect,
+    placementRect,
+  };
+}
+
+async function createReferenceRegionInputs(selection, docSize, model) {
+  const targetRect = clampRectToDocument(cloneRect(selection), docSize);
+  const placementRect = getInpaintPlacementRect(targetRect, docSize, model);
+  const apiSize = getImageEditSizeForSelection(placementRect.width, placementRect.height, model);
+  const image = await exportDocumentRegionAsBase64(placementRect, null);
+  await saveDebugBase64Image("openai-last-reference-region.png", image);
+
+  return {
+    image,
+    apiSize,
+    displaySize: `${placementRect.width}x${placementRect.height}`,
     targetRect,
     placementRect,
   };

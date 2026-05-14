@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.44] - 2026-05-14
+
+### Changed
+
+- Reference mode now uses a no-mask image-to-image edit path for the current selection when one exists.
+- Reference mode exports the selected region with surrounding context and imports the result back to that captured region.
+- Removed the inactive Influence Strength slider from Reference mode.
+
 ## [0.1.43] - 2026-05-14
 
 ### Fixed

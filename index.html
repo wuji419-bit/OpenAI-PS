@@ -15,7 +15,7 @@
             <div class="title-inline">
               <span id="connectionBadge" class="connection-dot" aria-hidden="true" title="未配置 API Key"></span>
               <h1>OpenAI 图片</h1>
-              <span id="versionText" class="version-inline">v0.1.43</span>
+              <span id="versionText" class="version-inline">v0.1.44</span>
             </div>
             <button id="settingsToggleBtn" class="icon-button settings-entry-button" type="button" title="打开 API 设置" aria-label="打开 API 设置"><span class="settings-glyph" aria-hidden="true">⚙</span></button>
             <p id="modeHint" class="sr-only">直接生成新图</p>
@@ -55,13 +55,9 @@
                   <path d="M4.5 6.5h15v11h-15z" />
                   <path d="m7.5 15 3-3 2.2 2.2 2.6-3.4 2.2 4.2" />
                 </svg>
-                <strong>使用当前 Photoshop 文档作为参考图</strong>
-                <span>生成前会自动导出当前画布，作为图片编辑接口的 image 输入。</span>
+                <strong>无 Mask 参考图重绘</strong>
+                <span>有选区时导出选区上下文做图生图；没有选区时导出整张画布作为参考图。</span>
               </div>
-              <label class="context-slider">
-                <span class="form-label">影响强度 <strong>0.75</strong></span>
-                <input type="range" min="0" max="1" step="0.01" value="0.75" disabled />
-              </label>
             </div>
             <div id="selectionContext" class="mode-context-body hidden">
               <div class="source-drop-zone compact">
@@ -195,7 +191,7 @@
       <section id="settingsView" class="settings-view hidden">
         <header class="settings-header">
           <button id="settingsBackBtn" class="icon-button back-button" type="button" title="返回" aria-label="返回"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5" /></svg></button>
-          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.43</span></div>
+          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.44</span></div>
         </header>
         <div class="settings-scroll">
           <section class="settings-group">
