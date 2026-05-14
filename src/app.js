@@ -477,6 +477,10 @@ async function runGeneration() {
   const settings = getSettings();
   $("baseUrlInput").value = settings.baseUrl;
   $("comfyUrlInput").value = settings.comfyUrl;
+  if (state.mode !== "cutout" && isComfyModel(settings.model)) {
+    settings.model = "gpt-image-2";
+    $("modelInput").value = settings.model;
+  }
   if (!settings.apiKey && !isComfyModel(settings.model) && state.mode !== "cutout") {
     setStatus("请先填写 OpenAI API Key");
     return;
@@ -643,10 +647,6 @@ async function requestGenerations(settings, prompt) {
 }
 
 async function requestSingleGeneration(settings, prompt) {
-  if (isComfyModel(settings.model)) {
-    return requestSingleComfyEdit(settings, prompt, null, null, { mode: "generate" });
-  }
-
   const payload = cleanObject({
     model: settings.model,
     prompt,
@@ -686,10 +686,6 @@ async function requestEdits(settings, prompt, imageB64, maskB64, options = {}) {
 }
 
 async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = {}) {
-  if (isComfyModel(settings.model)) {
-    return requestSingleComfyEdit(settings, prompt, imageB64, maskB64, options);
-  }
-
   const form = new FormData();
   const requestSize = options.size || settings.size;
   const imageBytes = estimateBase64Bytes(imageB64);

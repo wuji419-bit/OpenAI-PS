@@ -2,16 +2,28 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.36] - 2026-05-14
+
+### Changed
+
+- Locked the routing boundary: only Cutout mode uses the configured ComfyUI server.
+- Text-to-image, reference edit, selection repaint, and outpaint now stay on OpenAI-compatible image endpoints even if an older `comfy:*` model value is still stored locally.
+- Removed ComfyUI inpaint presets from the visible Model ID suggestions to avoid accidental route changes.
+
+### Fixed
+
+- Prevented selection repaint from being routed to ComfyUI because of stale model settings.
+
 ## [0.1.35] - 2026-05-14
 
 ### Changed
 
-- Selection repaint now respects the selected model route again: OpenAI image models use the configured `/images/edits` endpoint, while `comfy:*` models use the remote ComfyUI workflows.
+- Selection repaint uses OpenAI-compatible image models and the configured `/images/edits` endpoint.
 - Updated the plugin version from `0.1.34` to `0.1.35`.
 
 ### Fixed
 
-- Removed the forced `comfy:flux-fill` fallback from selection repaint so local OpenAI-compatible edit proxies can be used intentionally.
+- Removed the forced `comfy:flux-fill` fallback from selection repaint so local OpenAI-compatible edit proxies are used intentionally.
 
 ## [0.1.34] - 2026-05-14
 
@@ -26,7 +38,7 @@ All notable changes to this project are documented here.
 
 ### Changed
 
-- Selection repaint can use `comfy:flux-fill` when the model is explicitly set to a ComfyUI preset.
+- Added experimental ComfyUI inpaint workflow files for remote setup validation; active plugin routing was later restricted in `0.1.36` so only Cutout mode uses ComfyUI.
 - ComfyUI inpaint outputs are mask-locked so pixels outside the selected mask are restored from the original input.
 - Cutout no longer treats fully opaque PNGs as already-cut transparent assets; existing alpha is only used when meaningful transparency is detected.
 - Bumped the plugin version from `0.1.20` to `0.1.34`.
