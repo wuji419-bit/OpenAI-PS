@@ -11,7 +11,7 @@ The plugin is designed for fast creative loops: generate a draft, use the curren
 - Text-to-image generation through the OpenAI Image API.
 - Reference-image editing by exporting the current Photoshop document and sending it to OpenAI edits.
 - Rectangular-selection repainting with a generated same-size mask.
-- ComfyUI-backed selection repainting with Basic Inpaint, SDXL Inpaint, and FLUX Fill workflow presets.
+- Optional ComfyUI-backed selection repainting with Basic Inpaint, SDXL Inpaint, and FLUX Fill workflow presets.
 - Outpainting by adding top, bottom, left, and right margins before an edit request.
 - Cutout mode for exporting the active canvas or selected region to ComfyUI and placing the returned transparent PNG back at the original position.
 - RMBG subject cutout for opaque character, prop, monster, weapon, and white-background assets.
@@ -46,7 +46,7 @@ Image edits: /images/edits
 
 ## ComfyUI Flow
 
-The plugin can send selected regions and cutout inputs to a remote ComfyUI server. The default development URL is:
+The plugin can send selected regions and cutout inputs to a remote ComfyUI server when a `comfy:*` model preset is selected. The default development URL is:
 
 ```text
 ComfyUI URL: http://192.168.1.128:8188
@@ -59,7 +59,7 @@ Bundled workflow files live in [`comfyui-workflows/`](comfyui-workflows/):
 - `codex_flux_fill_inpaint_masklock_api.json`
 - `codex_transparent_png_effect_composite_api.json`
 
-For selection repainting, ComfyUI outputs are mask-locked before being returned to Photoshop, so pixels outside the selected region stay identical to the original input. For cutout, the plugin detects whether the input already has meaningful alpha; opaque subject images use RMBG on the ComfyUI machine, while effect images can use color-channel extraction.
+For OpenAI selection repainting, the plugin uses the configured Image Edits endpoint such as `/images/edits`. For ComfyUI selection repainting, outputs are mask-locked before being returned to Photoshop, so pixels outside the selected region stay identical to the original input. For cutout, the plugin detects whether the input already has meaningful alpha; opaque subject images use RMBG on the ComfyUI machine, while effect images can use color-channel extraction.
 
 ## Repository Layout
 

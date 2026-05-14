@@ -6,8 +6,8 @@
 
 - 文生图：输入提示词生成图片。
 - 参考图编辑：把当前 Photoshop 画布导出为参考图，再交给 OpenAI 编辑。
-- 矩形选区重绘：读取当前矩形选区，生成同尺寸 mask；默认可走 AI 电脑上的 ComfyUI FLUX Fill。
-- ComfyUI 局部重绘：内置 Basic Inpaint、SDXL Inpaint、FLUX Fill workflow，mask 外像素会锁回原图。
+- 矩形选区重绘：读取当前矩形选区，生成同尺寸 mask；默认按当前模型走 OpenAI `/images/edits` 或兼容本地代理。
+- ComfyUI 局部重绘：手动选择 `comfy:*` 模型时可用 Basic Inpaint、SDXL Inpaint、FLUX Fill workflow，mask 外像素会锁回原图。
 - 扩图：按上、下、左、右边距生成扩图输入和 mask。
 - 抠图：把当前画布或选区上传到 ComfyUI，返回透明 PNG，并自动放回原位置成为新图层。
 - 主体抠图：对白底、角色、怪物、武器、道具等不带透明通道的图，默认走 ComfyUI RMBG。

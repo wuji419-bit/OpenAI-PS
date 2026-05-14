@@ -21,7 +21,8 @@ const SETTINGS_KEY = "openaiPhotoshop.settings.v1";
 const DEFAULT_BASE_URL = "http://127.0.0.1:49456/v1";
 const DEFAULT_COMFY_URL = "http://192.168.1.128:8188";
 const DEFAULT_CUTOUT_ANALYSIS_MODEL = "gpt-5.4-mini";
-const DEFAULT_INPAINT_COMFY_MODEL = "comfy:flux-fill";
+const COMFY_INPAINT_MAX_PIXELS = 1600 * 1600;
+const COMFY_INPAINT_MAX_EDGE = 1600;
 const MAX_BATCH_COUNT = 10;
 const COMFY_WORKFLOWS = {
   "comfy:basic-inpaint": {
@@ -595,14 +596,7 @@ function buildPrompt(prompt, negative) {
 }
 
 function getInpaintSettings(settings) {
-  if (isComfyModel(settings.model)) {
-    return settings;
-  }
-  setStatus("选区重绘已切到 AI 电脑 ComfyUI FLUX Fill...");
-  return {
-    ...settings,
-    model: DEFAULT_INPAINT_COMFY_MODEL,
-  };
+  return settings;
 }
 
 function buildImageEditPrompt(prompt, mode) {
@@ -679,9 +673,10 @@ async function requestEdits(settings, prompt, imageB64, maskB64, options = {}) {
   const results = [];
 
   for (let index = 0; index < total; index += 1) {
-    setStatus(maskB64
-      ? `正在调用 OpenAI 局部编辑 ${index + 1}/${total}...`
-      : `正在调用 OpenAI 参考图编辑 ${index + 1}/${total}...`);
+    const routeLabel = isComfyModel(settings.model)
+      ? `${getComfyPresetLabel(settings.model)}`
+      : maskB64 ? "OpenAI 局部编辑" : "OpenAI 参考图编辑";
+    setStatus(`正在调用 ${routeLabel} ${index + 1}/${total}...`);
     setProgress(68 + Math.round((index / total) * 14), true);
     const batch = await requestSingleEdit(settings, prompt, imageB64, maskB64, options);
     results.push(...batch);
@@ -750,10 +745,14 @@ async function requestSingleComfyEdit(settings, prompt, imageB64, maskB64, optio
   }
 
   const workflow = await loadComfyWorkflow(preset);
+  setProgress(60, true);
+  setStatus(`正在准备 ${preset.label} 输入图和透明 mask...`);
   const maskedInputB64 = await createComfyMaskInputBase64(imageB64, maskB64);
   await saveDebugBase64Image("comfy-last-mask-input.png", maskedInputB64);
 
   const runId = `${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+  setProgress(62, true);
+  setStatus(`正在上传 ${preset.label} 输入到 ComfyUI...`);
   const uploadName = await uploadComfyImage(
     settings,
     maskedInputB64,
@@ -1981,8 +1980,12 @@ async function createInpaintInputs(selection, docSize, model) {
   const targetRect = clampRectToDocument(cloneRect(selection), docSize);
   const placementRect = getInpaintPlacementRect(targetRect, docSize, model);
   const apiSize = getImageEditSizeForSelection(placementRect.width, placementRect.height, model);
-  const image = await exportDocumentRegionAsBase64(placementRect);
-  const mask = await createSelectionMaskBase64(placementRect, targetRect);
+  const outputSize = getInpaintOutputSize(placementRect, apiSize, model);
+  if (outputSize) {
+    setStatus(`正在导出 ComfyUI 输入：原区域 ${placementRect.width}x${placementRect.height}，压缩到 ${outputSize.width}x${outputSize.height}`);
+  }
+  const image = await exportDocumentRegionAsBase64(placementRect, outputSize);
+  const mask = await createSelectionMaskBase64(placementRect, targetRect, outputSize);
   await saveDebugBase64Image("openai-last-inpaint-input.png", image);
   await saveDebugBase64Image("openai-last-inpaint-mask.png", mask);
 
@@ -1994,6 +1997,32 @@ async function createInpaintInputs(selection, docSize, model) {
     targetRect,
     placementRect,
   };
+}
+
+function getInpaintOutputSize(placementRect, apiSize, model) {
+  if (!isComfyModel(model)) {
+    return null;
+  }
+
+  const sourceWidth = Math.max(1, Math.round(placementRect.width));
+  const sourceHeight = Math.max(1, Math.round(placementRect.height));
+  const pixels = sourceWidth * sourceHeight;
+  const edge = Math.max(sourceWidth, sourceHeight);
+  if (pixels <= COMFY_INPAINT_MAX_PIXELS && edge <= COMFY_INPAINT_MAX_EDGE) {
+    return null;
+  }
+
+  const scale = Math.min(
+    COMFY_INPAINT_MAX_EDGE / edge,
+    Math.sqrt(COMFY_INPAINT_MAX_PIXELS / pixels),
+  );
+  return normalizeFlexibleImageSize(sourceWidth * scale, sourceHeight * scale, {
+    multiple: 16,
+    minPixels: 256 * 256,
+    maxPixels: COMFY_INPAINT_MAX_PIXELS,
+    maxEdge: COMFY_INPAINT_MAX_EDGE,
+    maxRatio: 8,
+  });
 }
 
 function getInpaintPlacementRect(targetRect, docSize, model) {
@@ -2035,9 +2064,11 @@ async function createRelativeRectMaskBase64(width, height, sourceRect, targetRec
   return createRectMaskBase64(width, height, relative);
 }
 
-async function createSelectionMaskBase64(sourceRect, fallbackRect) {
+async function createSelectionMaskBase64(sourceRect, fallbackRect, outputSize = null) {
   if (!imaging?.getSelection || !app.activeDocument) {
-    return createRelativeRectMaskBase64(sourceRect.width, sourceRect.height, sourceRect, fallbackRect);
+    const width = outputSize?.width || sourceRect.width;
+    const height = outputSize?.height || sourceRect.height;
+    return createRelativeRectMaskBase64(width, height, sourceRect, fallbackRect);
   }
 
   let selectionImage = null;
@@ -2053,27 +2084,36 @@ async function createSelectionMaskBase64(sourceRect, fallbackRect) {
     });
 
     const imageData = selectionImage?.imageData;
-    const width = Math.round(toNumber(imageData?.width) || sourceRect.width);
-    const height = Math.round(toNumber(imageData?.height) || sourceRect.height);
+    const sourceWidth = Math.round(toNumber(imageData?.width) || sourceRect.width);
+    const sourceHeight = Math.round(toNumber(imageData?.height) || sourceRect.height);
+    const width = outputSize?.width || sourceWidth;
+    const height = outputSize?.height || sourceHeight;
     const pixels = await imageData.getData({ chunky: true });
     const rgba = new Uint8Array(width * height * 4);
-    const pixelCount = Math.max(1, width * height);
+    const pixelCount = Math.max(1, sourceWidth * sourceHeight);
     const inferredComponents = Math.floor((pixels?.length || pixelCount) / pixelCount);
     const components = Math.max(1, imageData.components || inferredComponents || 1);
 
-    for (let pixelIndex = 0; pixelIndex < width * height; pixelIndex += 1) {
-      const selected = Math.max(0, Math.min(255, pixels[pixelIndex * components] || 0));
-      const offset = pixelIndex * 4;
-      rgba[offset] = 255;
-      rgba[offset + 1] = 255;
-      rgba[offset + 2] = 255;
-      rgba[offset + 3] = 255 - selected;
+    for (let y = 0; y < height; y += 1) {
+      const sourceY = Math.min(sourceHeight - 1, Math.floor((y / Math.max(1, height)) * sourceHeight));
+      for (let x = 0; x < width; x += 1) {
+        const sourceX = Math.min(sourceWidth - 1, Math.floor((x / Math.max(1, width)) * sourceWidth));
+        const sourceIndex = (sourceY * sourceWidth + sourceX) * components;
+        const selected = Math.max(0, Math.min(255, pixels[sourceIndex] || 0));
+        const offset = (y * width + x) * 4;
+        rgba[offset] = 255;
+        rgba[offset + 1] = 255;
+        rgba[offset + 2] = 255;
+        rgba[offset + 3] = 255 - selected;
+      }
     }
 
     return bytesToBase64(encodePngRgba(width, height, rgba));
   } catch (error) {
     console.warn("createSelectionMaskBase64 failed, using rectangular mask", error);
-    return createRelativeRectMaskBase64(sourceRect.width, sourceRect.height, sourceRect, fallbackRect);
+    const width = outputSize?.width || sourceRect.width;
+    const height = outputSize?.height || sourceRect.height;
+    return createRelativeRectMaskBase64(width, height, sourceRect, fallbackRect);
   } finally {
     try {
       selectionImage?.imageData?.dispose?.();
