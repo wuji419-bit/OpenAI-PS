@@ -280,11 +280,26 @@ h2 {
   height: 30px;
 }
 
+.settings-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--text-soft);
+  font-size: 17px;
+  line-height: 18px;
+}
+
 .icon-button:hover,
 .tool-icon-button:hover,
 .field-action:hover {
   border-color: var(--line);
   background: var(--surface-raised);
+  color: var(--text);
+}
+
+.icon-button:hover .settings-glyph {
   color: var(--text);
 }
 

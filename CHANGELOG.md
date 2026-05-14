@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.40] - 2026-05-14
+
+### Fixed
+
+- Replaced the top-right settings SVG icon with a stable text glyph so it remains visible in the Photoshop UXP panel.
+
 ## [0.1.39] - 2026-05-14
 
 ### Added
