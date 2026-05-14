@@ -595,6 +595,8 @@ async function runGeneration() {
       setStatus(`正在重绘选区，接口尺寸 ${inpaint.apiSize}，只导回 ${inpaint.displaySize}`);
       const inpaintSettings = getInpaintSettings(settings);
       items = await requestEdits(inpaintSettings, buildImageEditPrompt(prompt, "inpaint"), inpaint.image, inpaint.mask, { size: inpaint.apiSize });
+      setProgress(84, true);
+      setStatus("模型已返回，正在锁定非选区像素...");
       items = await compositeItemsWithOriginalMask(items, inpaint.image, inpaint.mask);
     } else if (state.mode === "outpaint") {
       setProgress(18, true);
@@ -789,21 +791,21 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
     setStatus(`已提交 ${waitLabel}，正在等待模型返回... ${seconds}s`);
   }, 3000);
 
-  let response;
   try {
-    response = await sendRequest(buildApiUrl(settings.baseUrl, settings.editPath), {
+    const response = await sendRequest(buildApiUrl(settings.baseUrl, settings.editPath), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${settings.apiKey}`,
       },
       body: form,
       timeoutMs: 12 * 60 * 1000,
+      forceXhr: true,
     }, maskB64 ? "局部编辑请求" : "参考图编辑请求");
+    setStatus(`模型已返回，正在读取 ${waitLabel} 图片数据...`);
+    return await parseOpenAIImageResponse(response);
   } finally {
     window.clearInterval(waitTimer);
   }
-
-  return parseOpenAIImageResponse(response);
 }
 
 async function requestSingleComfyEdit(settings, prompt, imageB64, maskB64, options = {}) {
@@ -1551,11 +1553,16 @@ function calculateEffectAlpha(r, g, b, sourceAlpha, mode, profile, alphaScale) {
 async function compositeItemsWithOriginalMask(items, originalB64, maskB64) {
   if (!maskB64) return items;
   const composited = [];
+  const total = Math.max(1, (items || []).length);
+  let position = 0;
   for (const item of items || []) {
+    position += 1;
     if (!item?.b64) {
       composited.push(item);
       continue;
     }
+    setStatus(`正在合成选区结果 ${position}/${total}，非选区保持原图...`);
+    await yieldToUi();
     const composite = await createInpaintCompositeImages(item.b64, originalB64, maskB64);
     composited.push({
       ...item,
@@ -1568,6 +1575,8 @@ async function compositeItemsWithOriginalMask(items, originalB64, maskB64) {
 }
 
 async function createInpaintCompositeImages(generatedB64, originalB64, maskB64) {
+  setStatus("正在载入模型返回图与遮罩...");
+  await yieldToUi();
   const original = await loadImage(`data:image/png;base64,${stripDataUrl(originalB64)}`);
   const generated = await loadImage(`data:image/png;base64,${stripDataUrl(generatedB64)}`);
   const mask = await loadImage(`data:image/png;base64,${stripDataUrl(maskB64)}`);
@@ -1596,6 +1605,7 @@ async function createInpaintCompositeImages(generatedB64, originalB64, maskB64) 
   const outputImage = ctx.getImageData(0, 0, width, height);
   const patchImage = ctx.createImageData(width, height);
 
+  setStatus(`正在合成 ${width} x ${height} 选区图层...`);
   for (let index = 0; index < outputImage.data.length; index += 4) {
     const editStrength = (255 - maskPixels[index + 3]) / 255;
     if (editStrength > 0) {
@@ -1608,6 +1618,9 @@ async function createInpaintCompositeImages(generatedB64, originalB64, maskB64) 
       patchImage.data[index + 1] = editImage.data[index + 1];
       patchImage.data[index + 2] = editImage.data[index + 2];
       patchImage.data[index + 3] = patchAlpha;
+    }
+    if (index > 0 && index % 1048576 === 0) {
+      await yieldToUi();
     }
   }
 
@@ -1624,10 +1637,12 @@ async function createInpaintCompositeImages(generatedB64, originalB64, maskB64) 
 }
 
 async function parseOpenAIImageResponse(response) {
+  setStatus("正在读取 OpenAI 图片响应...");
   const text = await response.text();
   let json;
 
   try {
+    setStatus("正在解析 OpenAI 返回图片...");
     json = JSON.parse(text);
   } catch (error) {
     const detail = text ? text.slice(0, 300) : response.statusText;
@@ -1639,6 +1654,7 @@ async function parseOpenAIImageResponse(response) {
   }
 
   const data = json.data || [];
+  setStatus(`已解析 ${data.length} 张返回图，正在准备预览...`);
   return data.map((item) => ({
     b64: item.b64_json || item.b64 || null,
     url: item.url || null,
@@ -1647,7 +1663,15 @@ async function parseOpenAIImageResponse(response) {
 }
 
 async function sendRequest(url, options = {}, label = "请求") {
-  const { responseType, timeoutMs = 180000, ...fetchOptions } = options;
+  const { responseType, timeoutMs = 180000, forceXhr = false, ...fetchOptions } = options;
+  if (forceXhr && typeof XMLHttpRequest !== "undefined") {
+    try {
+      return await sendXhrRequest(url, { responseType, timeoutMs, ...fetchOptions });
+    } catch (xhrError) {
+      throw makeNetworkError(xhrError, url, label);
+    }
+  }
+
   try {
     return await fetchWithTimeout(url, fetchOptions, timeoutMs);
   } catch (fetchError) {
@@ -2690,6 +2714,10 @@ function setProgress(value, visible) {
   state.progressVisible = Boolean(visible);
   track.classList.toggle("hidden", !visible);
   fill.style.width = `${percent}%`;
+}
+
+function yieldToUi() {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
 
 function setStatus(message) {

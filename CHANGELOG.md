@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.43] - 2026-05-14
+
+### Fixed
+
+- Kept selection repaint status updates alive after the OpenAI edit request returns, covering response reading, JSON parsing, and mask compositing.
+- Forced OpenAI-compatible image edit requests through XHR to avoid Photoshop UXP fetch stalls on multipart uploads with large b64 JSON responses.
+- Yielded during mask compositing so large selected areas do not make the Photoshop panel look frozen after the model response arrives.
+
 ## [0.1.42] - 2026-05-14
 
 ### Changed
