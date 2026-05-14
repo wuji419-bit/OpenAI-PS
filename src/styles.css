@@ -526,14 +526,14 @@ h2 {
 }
 
 .parameter-grid {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px;
+  gap: 8px;
 }
 
 .parameter-grid .form-field {
-  width: 48%;
-  margin-bottom: 12px;
+  width: auto;
+  margin-bottom: 0;
 }
 
 .form-field {
@@ -1382,13 +1382,14 @@ h2 {
 
 /* v0.1.13: keep Photoshop UXP parameter controls compact and aligned. */
 .parameter-section {
-  gap: 6px;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 .parameter-grid .form-field {
-  width: 49%;
-  margin: 0 1% 8px 0;
-  min-height: 42px;
+  width: auto;
+  margin: 0;
+  min-height: 0;
 }
 
 .parameter-grid .form-label {
@@ -1402,12 +1403,8 @@ h2 {
   min-height: 28px;
 }
 
-.parameter-grid input[type="range"] {
-  display: block;
+.parameter-grid .quantity-field input[type="number"] {
   height: 28px;
-  margin: 0;
-}
-
-.parameter-grid .slider-field {
-  justify-content: flex-start;
+  padding: 0 6px;
+  text-align: center;
 }

@@ -15,7 +15,7 @@
             <div class="title-inline">
               <span id="connectionBadge" class="connection-dot" aria-hidden="true" title="未配置 API Key"></span>
               <h1>OpenAI 图片</h1>
-              <span id="versionText" class="version-inline">v0.1.41</span>
+              <span id="versionText" class="version-inline">v0.1.42</span>
             </div>
             <button id="settingsToggleBtn" class="icon-button settings-entry-button" type="button" title="打开 API 设置" aria-label="打开 API 设置"><span class="settings-glyph" aria-hidden="true">⚙</span></button>
             <p id="modeHint" class="sr-only">直接生成新图</p>
@@ -119,31 +119,16 @@
                   </select>
                 </div>
               </label>
-              <label class="form-field">
-                <span class="form-label">质量</span>
-                <div class="select-wrap">
-                  <select id="qualityInput">
-                    <option value="auto">自动</option>
-                    <option value="low">低</option>
-                    <option value="medium">标准</option>
-                    <option value="high">高清</option>
-                  </select>
-                </div>
-              </label>
-              <label class="form-field slider-field">
+              <select id="qualityInput" class="hidden" aria-hidden="true">
+                <option value="auto">自动</option>
+              </select>
+              <label class="form-field quantity-field">
                 <span class="form-label">数量: <strong id="countValue">1</strong></span>
-                <input id="countInput" type="range" min="1" max="10" step="1" value="1" />
+                <input id="countInput" type="number" min="1" max="10" step="1" value="1" />
               </label>
-              <label class="form-field">
-                <span class="form-label">格式</span>
-                <div class="select-wrap">
-                  <select id="formatInput">
-                    <option value="png">PNG</option>
-                    <option value="jpeg">JPEG</option>
-                    <option value="webp">WEBP</option>
-                  </select>
-                </div>
-              </label>
+              <select id="formatInput" class="hidden" aria-hidden="true">
+                <option value="png">PNG</option>
+              </select>
             </div>
             <label class="checkbox-line" for="fitSelectionInput">
               <input id="fitSelectionInput" type="checkbox" checked />
@@ -210,7 +195,7 @@
       <section id="settingsView" class="settings-view hidden">
         <header class="settings-header">
           <button id="settingsBackBtn" class="icon-button back-button" type="button" title="返回" aria-label="返回"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5" /></svg></button>
-          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.41</span></div>
+          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.42</span></div>
         </header>
         <div class="settings-scroll">
           <section class="settings-group">

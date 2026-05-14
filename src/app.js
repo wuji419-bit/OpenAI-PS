@@ -192,9 +192,9 @@ function loadSettings() {
   $("generationPathInput").value = settings.generationPath;
   $("editPathInput").value = settings.editPath;
   $("sizeInput").value = settings.size;
-  $("qualityInput").value = settings.quality;
+  $("qualityInput").value = "auto";
   $("countInput").value = clampInteger(settings.count, 1, MAX_BATCH_COUNT, 1);
-  $("formatInput").value = settings.format;
+  $("formatInput").value = "png";
 }
 
 function saveSettings() {
@@ -293,9 +293,9 @@ function getSettings() {
     generationPath: normalizePath($("generationPathInput").value.trim() || "/images/generations"),
     editPath: normalizePath($("editPathInput").value.trim() || "/images/edits"),
     size: $("sizeInput").value,
-    quality: $("qualityInput").value,
+    quality: "auto",
     count: clampInteger($("countInput").value, 1, MAX_BATCH_COUNT, 1),
-    format: $("formatInput").value,
+    format: "png",
   };
 }
 
@@ -2542,7 +2542,7 @@ function renderSelectedPreview() {
 
   const meta = document.createElement("div");
   meta.className = "selected-preview-meta";
-  meta.textContent = `${MODE_META[item.mode]?.label || "结果"} · ${item.size || "auto"} · ${item.format || "png"}`;
+  meta.textContent = `${MODE_META[item.mode]?.label || "结果"} · ${item.size || "auto"}`;
 
   preview.append(image, meta);
   preview.classList.remove("hidden", "is-error");

@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.42] - 2026-05-14
+
+### Changed
+
+- Simplified the main parameter controls by removing visible Quality and Format controls.
+- Fixed image requests to use automatic quality and PNG output while keeping only Count visible.
+- Tightened the parameter layout and removed output format text from the selected result preview.
+
 ## [0.1.41] - 2026-05-14
 
 ### Fixed
