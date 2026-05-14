@@ -1673,7 +1673,7 @@ async function parseOpenAIImageResponse(response) {
   }
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${json?.error?.message || response.statusText}`);
+    throw new Error(`HTTP ${response.status}: ${formatOpenAIError(json, response.statusText)}`);
   }
 
   const data = json.data || [];
@@ -1683,6 +1683,21 @@ async function parseOpenAIImageResponse(response) {
     url: item.url || null,
     format: item.output_format || item.format || null,
   }));
+}
+
+function formatOpenAIError(json, fallback = "Request failed") {
+  const error = json?.error;
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error && typeof error === "object") {
+    const parts = [error.message, error.code || error.error_code, error.type].filter(Boolean);
+    return parts.length ? parts.join(" | ") : JSON.stringify(error).slice(0, 300);
+  }
+  if (json?.message) {
+    return String(json.message);
+  }
+  return fallback || "Request failed";
 }
 
 async function sendRequest(url, options = {}, label = "请求") {

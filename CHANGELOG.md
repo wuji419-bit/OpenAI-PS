@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.46] - 2026-05-14
+
+### Fixed
+
+- Show string-style OpenAI-compatible error bodies, including cockpit-tools Codex authorization failures, instead of only `Service Unavailable`.
+
 ## [0.1.45] - 2026-05-14
 
 ### Fixed
