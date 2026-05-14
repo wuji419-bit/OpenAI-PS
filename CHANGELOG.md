@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.47] - 2026-05-14
+
+### Fixed
+
+- Use the fetch transport for OpenAI-compatible image edits so local cockpit-tools requests are less likely to fail as UXP XHR long requests.
+- Refine selection repaint masks for white feather removal prompts so broad rectangular selections edit the feather instead of the whole rectangle.
+
 ## [0.1.46] - 2026-05-14
 
 ### Fixed

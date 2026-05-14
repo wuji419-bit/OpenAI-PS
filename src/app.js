@@ -604,7 +604,7 @@ async function runGeneration() {
       }
       setProgress(34, true);
       setStatus("正在导出选区上下文...");
-      const inpaint = await createInpaintInputs(selection, getDocumentSize(), settings.model);
+      const inpaint = await createInpaintInputs(selection, getDocumentSize(), settings.model, prompt);
       outputSize = inpaint.displaySize;
       targetRect = inpaint.targetRect;
       placementRect = inpaint.placementRect;
@@ -822,7 +822,7 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
       },
       body: form,
       timeoutMs: 12 * 60 * 1000,
-      forceXhr: true,
+      forceXhr: false,
     }, maskB64 ? "局部编辑请求" : "参考图编辑请求");
     setStatus(`模型已返回，正在读取 ${waitLabel} 图片数据...`);
     return await parseOpenAIImageResponse(response);
@@ -2151,7 +2151,7 @@ async function createRectMaskBase64(width, height, selection) {
   return bytesToBase64(encodePngRgba(width, height, rgba));
 }
 
-async function createInpaintInputs(selection, docSize, model) {
+async function createInpaintInputs(selection, docSize, model, prompt = "") {
   const targetRect = clampRectToDocument(cloneRect(selection), docSize);
   const placementRect = getInpaintPlacementRect(targetRect, docSize, model);
   const apiSize = getImageEditSizeForSelection(placementRect.width, placementRect.height, model);
@@ -2160,7 +2160,8 @@ async function createInpaintInputs(selection, docSize, model) {
     setStatus(`正在导出 ComfyUI 输入：原区域 ${placementRect.width}x${placementRect.height}，压缩到 ${outputSize.width}x${outputSize.height}`);
   }
   const image = await exportDocumentRegionAsBase64(placementRect, outputSize);
-  const mask = await createSelectionMaskBase64(placementRect, targetRect, outputSize);
+  let mask = await createSelectionMaskBase64(placementRect, targetRect, outputSize);
+  mask = await refineInpaintMaskForPrompt(image, mask, prompt);
   await saveDebugBase64Image("openai-last-inpaint-input.png", image);
   await saveDebugBase64Image("openai-last-inpaint-mask.png", mask);
 
@@ -2188,6 +2189,103 @@ async function createReferenceRegionInputs(selection, docSize, model) {
     targetRect,
     placementRect,
   };
+}
+
+async function refineInpaintMaskForPrompt(imageB64, maskB64, prompt) {
+  if (!shouldRefineWhiteFeatherMask(prompt)) {
+    return maskB64;
+  }
+
+  try {
+    const source = await loadImage(`data:image/png;base64,${stripDataUrl(imageB64)}`);
+    const mask = await loadImage(`data:image/png;base64,${stripDataUrl(maskB64)}`);
+    const width = source.naturalWidth || source.width;
+    const height = source.naturalHeight || source.height;
+    const sourceCanvas = document.createElement("canvas");
+    sourceCanvas.width = width;
+    sourceCanvas.height = height;
+    const sourceCtx = sourceCanvas.getContext("2d");
+    sourceCtx.drawImage(source, 0, 0, width, height);
+    const sourcePixels = sourceCtx.getImageData(0, 0, width, height);
+
+    const maskCanvas = document.createElement("canvas");
+    maskCanvas.width = width;
+    maskCanvas.height = height;
+    const maskCtx = maskCanvas.getContext("2d");
+    maskCtx.drawImage(mask, 0, 0, width, height);
+    const maskPixels = maskCtx.getImageData(0, 0, width, height);
+
+    const selected = new Uint8Array(width * height);
+    const refined = new Uint8Array(width * height);
+    let selectedCount = 0;
+    let candidateCount = 0;
+
+    for (let index = 0, pixel = 0; index < sourcePixels.data.length; index += 4, pixel += 1) {
+      const editable = maskPixels.data[index + 3] < 128;
+      if (!editable) continue;
+      selected[pixel] = 1;
+      selectedCount += 1;
+
+      const r = sourcePixels.data[index];
+      const g = sourcePixels.data[index + 1];
+      const b = sourcePixels.data[index + 2];
+      const a = sourcePixels.data[index + 3];
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const avg = (r + g + b) / 3;
+      const isWhiteFeather = a > 24 && avg > 165 && max - min < 70 && b >= r - 35 && g >= r - 45;
+      if (isWhiteFeather) {
+        refined[pixel] = 1;
+        candidateCount += 1;
+      }
+    }
+
+    if (selectedCount < 16 || candidateCount < Math.max(12, selectedCount * 0.006) || candidateCount > selectedCount * 0.72) {
+      return maskB64;
+    }
+
+    const expanded = dilateMask(refined, selected, width, height, 5);
+    for (let index = 0, pixel = 0; index < maskPixels.data.length; index += 4, pixel += 1) {
+      const editable = expanded[pixel] ? 0 : 255;
+      maskPixels.data[index] = 255;
+      maskPixels.data[index + 1] = 255;
+      maskPixels.data[index + 2] = 255;
+      maskPixels.data[index + 3] = editable;
+    }
+
+    maskCtx.putImageData(maskPixels, 0, 0);
+    setStatus("已根据提示词把选区 mask 收紧到白色羽毛区域");
+    return canvasToBase64(maskCanvas);
+  } catch (error) {
+    console.warn("refineInpaintMaskForPrompt failed", error);
+    return maskB64;
+  }
+}
+
+function shouldRefineWhiteFeatherMask(prompt) {
+  const value = String(prompt || "").toLowerCase();
+  return /(羽毛|白色羽毛|feather|plume)/i.test(value) && /(去掉|删除|移除|remove|erase|delete)/i.test(value);
+}
+
+function dilateMask(source, allowed, width, height, radius) {
+  const output = new Uint8Array(source);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const pixel = y * width + x;
+      if (!source[pixel]) continue;
+      for (let dy = -radius; dy <= radius; dy += 1) {
+        for (let dx = -radius; dx <= radius; dx += 1) {
+          if ((dx * dx) + (dy * dy) > radius * radius) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          const np = ny * width + nx;
+          if (allowed[np]) output[np] = 1;
+        }
+      }
+    }
+  }
+  return output;
 }
 
 function getInpaintOutputSize(placementRect, apiSize, model) {
