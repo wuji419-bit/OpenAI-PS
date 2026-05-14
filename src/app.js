@@ -231,7 +231,7 @@ function applyAuthJson() {
   $("baseUrlInput").value = "https://api.openai.com/v1";
   $("apiKeyInput").value = apiKey;
   $("quickApiKeyInput").value = apiKey;
-  $("modelInput").value = "gpt-image-1.5";
+  $("modelInput").value = "gpt-image-2";
   $("generationPathInput").value = "/images/generations";
   $("editPathInput").value = "/images/edits";
   $("authJsonInput").value = "";
@@ -797,7 +797,7 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
         Authorization: `Bearer ${settings.apiKey}`,
       },
       body: form,
-      timeoutMs: 120000,
+      timeoutMs: 12 * 60 * 1000,
     }, maskB64 ? "局部编辑请求" : "参考图编辑请求");
   } finally {
     window.clearInterval(waitTimer);

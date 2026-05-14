@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.41] - 2026-05-14
+
+### Fixed
+
+- Kept the OpenAI/Codex image route on `gpt-image-2` after auth import so it stays compatible with the cockpit-tools local API service.
+- Extended OpenAI-compatible image edit request timeout to 12 minutes so slower Codex `/images/edits` jobs are not cut off at 120 seconds.
+
 ## [0.1.40] - 2026-05-14
 
 ### Fixed
