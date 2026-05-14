@@ -472,6 +472,18 @@ h2 {
   gap: 6px;
 }
 
+.prompt-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.prompt-actions .mini-button {
+  flex: 0 0 auto;
+  min-width: 44px;
+  height: 24px;
+  padding: 0 7px;
+}
+
 .prompt-input {
   height: 140px;
   min-height: 140px;

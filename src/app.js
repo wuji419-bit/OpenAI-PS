@@ -1870,7 +1870,7 @@ async function importSelected() {
       ? (item.placementRect || item.targetRect || liveSelection)
       : null;
     const cropRect = shouldForceCapturedSelection
-      ? item.mode === "reference" ? item.cropRect : (item.cropRect || item.targetRect)
+      ? item.mode === "reference" ? null : (item.cropRect || item.targetRect)
       : shouldFit ? item.cropRect : null;
     const layerName = item.mode === "cutout"
       ? "OpenAI Cutout"
@@ -2582,9 +2582,17 @@ function renderGrid(container, items, isCurrent) {
       setStatus("图片预览失败：请尝试导入或重新生成");
     };
     image.addEventListener("click", () => selectResult(item, isCurrent));
+    image.addEventListener("dblclick", () => {
+      selectResult(item, isCurrent);
+      importSelected();
+    });
 
     tile.append(image);
     tile.addEventListener("click", () => selectResult(item, isCurrent));
+    tile.addEventListener("dblclick", () => {
+      selectResult(item, isCurrent);
+      importSelected();
+    });
     container.append(tile);
   });
 
@@ -2608,12 +2616,14 @@ function renderSelectedPreview() {
     preview.classList.add("is-error");
     setStatus("图片预览失败：接口返回了结果，但 UXP 没能显示缩略图");
   };
+  image.addEventListener("dblclick", importSelected);
 
   const meta = document.createElement("div");
   meta.className = "selected-preview-meta";
   meta.textContent = `${MODE_META[item.mode]?.label || "结果"} · ${item.size || "auto"}`;
 
   preview.append(image, meta);
+  preview.title = "双击导入当前结果";
   preview.classList.remove("hidden", "is-error");
 }
 

@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.45] - 2026-05-14
+
+### Fixed
+
+- Made the prompt action controls visible as text buttons in the Photoshop UXP panel.
+- Let result thumbnails and the large selected preview import with a double-click.
+- Imported no-mask reference-region results as the full generated crop instead of reapplying the selection crop mask.
+
 ## [0.1.44] - 2026-05-14
 
 ### Changed
