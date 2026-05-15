@@ -20,6 +20,7 @@ const HISTORY_KEY = "openaiPhotoshop.history.v1";
 const SETTINGS_KEY = "openaiPhotoshop.settings.v1";
 const DEFAULT_BASE_URL = "http://127.0.0.1:49456/v1";
 const DEFAULT_COMFY_URL = "http://192.168.1.128:8188";
+const KOUKOUTU_SYNC_URL = "https://sync.koukoutu.com/v1/create";
 const DEFAULT_CUTOUT_ANALYSIS_MODEL = "gpt-5.4-mini";
 const COMFY_INPAINT_MAX_PIXELS = 1600 * 1600;
 const COMFY_INPAINT_MAX_EDGE = 1600;
@@ -131,6 +132,7 @@ function bindEvents() {
     setStatus("配置已保存");
   });
   $("testConnectionBtn").addEventListener("click", testConnection);
+  $("testKoukoutuBtn").addEventListener("click", testKoukoutuConnection);
   $("apiKeyVisibilityBtn").addEventListener("click", toggleApiKeyVisibility);
   $("applyAuthJsonBtn").addEventListener("click", applyAuthJson);
 
@@ -178,6 +180,10 @@ function loadSettings() {
     quality: "auto",
     count: 1,
     format: "png",
+    koukoutuApiKey: "",
+    koukoutuFormat: "png",
+    koukoutuCrop: 0,
+    koukoutuBorder: 0,
   };
 
   const stored = readJsonLocal(SETTINGS_KEY, {});
@@ -191,6 +197,10 @@ function loadSettings() {
   $("modelInput").value = settings.model;
   $("generationPathInput").value = settings.generationPath;
   $("editPathInput").value = settings.editPath;
+  $("koukoutuApiKeyInput").value = settings.koukoutuApiKey || "";
+  $("koukoutuFormatInput").value = settings.koukoutuFormat || "png";
+  $("koukoutuCropInput").checked = Boolean(Number(settings.koukoutuCrop || 0));
+  $("koukoutuBorderInput").value = String(clampInteger(settings.koukoutuBorder, 0, 2, 0));
   $("sizeInput").value = settings.size;
   $("qualityInput").value = "auto";
   $("countInput").value = clampInteger(settings.count, 1, MAX_BATCH_COUNT, 1);
@@ -296,6 +306,10 @@ function getSettings() {
     quality: "auto",
     count: clampInteger($("countInput").value, 1, MAX_BATCH_COUNT, 1),
     format: "png",
+    koukoutuApiKey: $("koukoutuApiKeyInput").value.trim(),
+    koukoutuFormat: $("koukoutuFormatInput").value || "png",
+    koukoutuCrop: $("koukoutuCropInput").checked ? 1 : 0,
+    koukoutuBorder: clampInteger($("koukoutuBorderInput").value, 0, 2, 0),
   };
 }
 
@@ -538,6 +552,16 @@ async function testComfyConnection(settings) {
   }
 }
 
+async function testKoukoutuConnection() {
+  const settings = getSettings();
+  if (!settings.koukoutuApiKey) {
+    setStatus("请先填写抠抠图 API Key");
+    return;
+  }
+  saveSettings();
+  setStatus("抠抠图 API Key 已保存；首次抠图时会验证额度和权限");
+}
+
 async function runGeneration() {
   if (state.busy) return;
 
@@ -547,6 +571,10 @@ async function runGeneration() {
   if (state.mode !== "cutout" && isComfyModel(settings.model)) {
     settings.model = "gpt-image-2";
     $("modelInput").value = settings.model;
+  }
+  if (state.mode === "cutout" && !settings.koukoutuApiKey) {
+    setStatus("请先在设置里填写抠抠图 API Key");
+    return;
   }
   if (!settings.apiKey && !isComfyModel(settings.model) && state.mode !== "cutout") {
     setStatus("请先填写 OpenAI API Key");
@@ -629,11 +657,9 @@ async function runGeneration() {
       outputSize = cutout.displaySize;
       targetRect = cutout.targetRect;
       placementRect = cutout.placementRect;
-      setProgress(42, true);
-      const cutoutPrompt = await resolveCutoutPrompt(settings, prompt, cutout.image);
-      setProgress(58, true);
-      setStatus("正在提交 ComfyUI 抠图 workflow...");
-      items = [await requestComfyCutout(settings, cutoutPrompt, cutout.image)];
+      setProgress(52, true);
+      setStatus("正在调用抠抠图同步抠图 API...");
+      items = [await requestKoukoutuCutout(settings, cutout.image)];
     }
 
     const stamped = (items || []).map((item, index) => ({
@@ -665,7 +691,7 @@ async function runGeneration() {
     if (state.mode === "cutout" && stamped[0]) {
       setProgress(92, true);
       setStatus("正在把抠图结果放回原位置...");
-      await placeResultAsLayer(stamped[0], stamped[0].placementRect || stamped[0].targetRect, "OpenAI Cutout", null);
+      await placeResultAsLayer(stamped[0], stamped[0].placementRect || stamped[0].targetRect, "Koukoutu Cutout", null);
     }
     setProgress(100, true);
     setStatus(state.mode === "cutout"
@@ -829,6 +855,55 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
   } finally {
     window.clearInterval(waitTimer);
   }
+}
+
+async function requestKoukoutuCutout(settings, imageB64) {
+  const imageBytes = estimateBase64Bytes(imageB64);
+  if (imageBytes > 40 * 1024 * 1024) {
+    throw new Error(`抠抠图上传图片过大：${formatBytes(imageBytes)}，请缩小选区或画布后重试`);
+  }
+
+  const outputFormat = settings.koukoutuFormat === "webp" ? "webp" : "png";
+  const form = new FormData();
+  form.append("model_key", "background-removal");
+  form.append("image_file", base64ToBlob(imageB64, "image/png"), "photoshop-input.png");
+  form.append("output_format", outputFormat);
+  form.append("crop", String(settings.koukoutuCrop ? 1 : 0));
+  form.append("border", String(settings.koukoutuBorder || 0));
+  form.append("stamp_crop", "0");
+  form.append("response", "bytes");
+
+  setProgress(64, true);
+  setStatus(`正在上传到抠抠图：${formatBytes(imageBytes)}，输出 ${outputFormat.toUpperCase()}`);
+  const response = await sendRequest(KOUKOUTU_SYNC_URL, {
+    method: "POST",
+    headers: {
+      "X-API-Key": settings.koukoutuApiKey,
+    },
+    body: form,
+    responseType: "arraybuffer",
+    timeoutMs: 180000,
+  }, "抠抠图抠图");
+
+  if (!response.ok) {
+    const detail = await readResponseTextSafe(response);
+    throw new Error(`抠抠图失败：HTTP ${response.status} ${formatKoukoutuError(detail)}`);
+  }
+
+  setProgress(82, true);
+  setStatus("抠抠图已返回透明图，正在准备导入...");
+  const buffer = await response.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  if (!bytes.length) {
+    throw new Error("抠抠图返回为空");
+  }
+  const outputB64 = arrayBufferToBase64(buffer);
+  await saveDebugBase64Image(`cutout-last-koukoutu-output.${outputFormat}`, outputB64);
+  return {
+    b64: outputB64,
+    importB64: outputB64,
+    format: outputFormat,
+  };
 }
 
 async function requestSingleComfyEdit(settings, prompt, imageB64, maskB64, options = {}) {
@@ -1700,6 +1775,26 @@ function formatOpenAIError(json, fallback = "Request failed") {
   return fallback || "Request failed";
 }
 
+async function readResponseTextSafe(response) {
+  try {
+    return await response.text();
+  } catch (error) {
+    return response.statusText || "";
+  }
+}
+
+function formatKoukoutuError(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return "";
+  try {
+    const json = JSON.parse(raw);
+    const message = json.message || json.msg || json.error || json.detail || raw;
+    return typeof message === "string" ? message : JSON.stringify(message).slice(0, 300);
+  } catch (error) {
+    return raw.slice(0, 300);
+  }
+}
+
 async function sendRequest(url, options = {}, label = "请求") {
   const { responseType, timeoutMs = 180000, forceXhr = false, ...fetchOptions } = options;
   if (forceXhr && typeof XMLHttpRequest !== "undefined") {
@@ -1888,7 +1983,7 @@ async function importSelected() {
       ? item.mode === "reference" ? null : (item.cropRect || item.targetRect)
       : shouldFit ? item.cropRect : null;
     const layerName = item.mode === "cutout"
-      ? "OpenAI Cutout"
+      ? "Koukoutu Cutout"
       : item.mode === "reference" && shouldForceCapturedSelection
       ? "OpenAI Reference"
       : shouldForceCapturedSelection
@@ -2772,6 +2867,7 @@ function setBusy(busy) {
   $("clearResultsBtn").disabled = busy;
   $("saveSettingsBtn").disabled = busy;
   $("testConnectionBtn").disabled = busy;
+  $("testKoukoutuBtn").disabled = busy;
   $("generateBtnLabel").textContent = busy ? "生成中..." : "生成";
 }
 

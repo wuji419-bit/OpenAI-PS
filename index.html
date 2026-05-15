@@ -15,7 +15,7 @@
             <div class="title-inline">
               <span id="connectionBadge" class="connection-dot" aria-hidden="true" title="未配置 API Key"></span>
               <h1>OpenAI 图片</h1>
-              <span id="versionText" class="version-inline">v0.1.48</span>
+              <span id="versionText" class="version-inline">v0.1.49</span>
             </div>
             <button id="settingsToggleBtn" class="icon-button settings-entry-button" type="button" title="打开 API 设置" aria-label="打开 API 设置"><span class="settings-glyph" aria-hidden="true">⚙</span></button>
             <p id="modeHint" class="sr-only">直接生成新图</p>
@@ -178,7 +178,7 @@
       <section id="settingsView" class="settings-view hidden">
         <header class="settings-header">
           <button id="settingsBackBtn" class="icon-button back-button" type="button" title="返回" aria-label="返回"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5" /></svg></button>
-          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.48</span></div>
+          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.49</span></div>
         </header>
         <div class="settings-scroll">
           <section class="settings-group">
@@ -198,6 +198,16 @@
             <div class="group-title">Endpoints</div>
             <label class="form-field"><span class="field-label">Image Gen Path</span><input id="generationPathInput" type="text" value="/images/generations" /></label>
             <label class="form-field"><span class="field-label">Edit Path</span><input id="editPathInput" type="text" value="/images/edits" /></label>
+          </section>
+          <section class="settings-group">
+            <div class="group-title">抠抠图 API</div>
+            <label class="form-field"><span class="field-label">接口地址</span><input id="koukoutuEndpointInput" type="text" value="https://sync.koukoutu.com/v1/create" disabled /></label>
+            <label class="form-field"><span class="field-label">X-API-Key</span><input id="koukoutuApiKeyInput" type="password" placeholder="粘贴抠抠图 API Key" /></label>
+            <label class="form-field"><span class="field-label">输出格式</span><select id="koukoutuFormatInput"><option value="png">PNG 透明图层</option><option value="webp">WebP 省积分</option></select></label>
+            <label class="form-field"><span class="field-label">边缘增强</span><select id="koukoutuBorderInput"><option value="0">关闭</option><option value="1">1 倍增强</option><option value="2">2 倍增强</option></select></label>
+            <label class="checkbox-line" for="koukoutuCropInput"><input id="koukoutuCropInput" type="checkbox" /><span>自动裁切到主体边缘</span></label>
+            <p class="settings-help">抠图模式使用同步单张接口，上传当前选区或整张画布，返回透明图后自动放回 Photoshop。</p>
+            <button id="testKoukoutuBtn" class="secondary-button" type="button">保存抠图配置</button>
           </section>
         </div>
         <footer class="settings-footer">

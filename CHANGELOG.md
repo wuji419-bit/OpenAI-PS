@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.49] - 2026-05-15
+
+### Added
+
+- Added a dedicated Koukoutu API settings section with `X-API-Key`, output format, edge enhancement, and crop options.
+- Routed Cutout mode to Koukoutu's synchronous `background-removal` API and places the returned transparent result back into Photoshop.
+
 ## [0.1.48] - 2026-05-15
 
 ### Fixed
