@@ -26,6 +26,8 @@ const DEFAULT_SEMANTIC_EDIT_MODEL = "gpt-5.4-mini";
 const COMFY_INPAINT_MAX_PIXELS = 1600 * 1600;
 const COMFY_INPAINT_MAX_EDGE = 1600;
 const MAX_BATCH_COUNT = 10;
+const MAX_SPLIT_LAYERS = 40;
+const SPLIT_ALPHA_THRESHOLD = 18;
 const COMFY_WORKFLOWS = {
   "comfy:basic-inpaint": {
     label: "ComfyUI Basic Inpaint",
@@ -77,6 +79,7 @@ const MODE_META = {
   inpaint: { hint: "按当前选区进行局部重绘", label: "选区重绘" },
   outpaint: { hint: "向画布四周扩展内容", label: "扩图" },
   cutout: { hint: "把当前画布或选区抠成透明 PNG", label: "抠图" },
+  split: { hint: "用 gpt-image-2 识别元素并拆成独立图层", label: "拆图" },
 };
 
 const state = {
@@ -425,12 +428,12 @@ function updateModeUI() {
   });
 
   $("outpaintControls").classList.toggle("hidden", state.mode !== "outpaint");
-  $("sizeField").classList.toggle("hidden", state.mode === "inpaint" || state.mode === "cutout");
+  $("sizeField").classList.toggle("hidden", state.mode === "inpaint" || state.mode === "cutout" || state.mode === "split");
   $("modeContextPanel").classList.add("hidden");
   $("referenceContext").classList.toggle("hidden", state.mode !== "reference");
   $("selectionContext").classList.toggle(
     "hidden",
-    state.mode !== "inpaint" && state.mode !== "outpaint" && state.mode !== "cutout"
+    state.mode !== "inpaint" && state.mode !== "outpaint" && state.mode !== "cutout" && state.mode !== "split"
   );
 
   const modeLabels = {
@@ -479,6 +482,16 @@ function updateModeUI() {
       placeholder: "auto / 白底主体 / 黑底光效 / 火焰 / 蓝色电光 / alpha...",
       negativePlaceholder: "例如：更透明、保留亮部、边缘柔和...",
     },
+  };
+
+  modeLabels.split = {
+    icon: "S",
+    title: "拆图",
+    text: "使用 gpt-image-2 先识别画面元素并输出透明 PNG，再自动拆成单独图层放回 Photoshop。",
+    prompt: "拆图说明 (可选)",
+    negative: "辅助说明 (可选)",
+    placeholder: "可留空；例如：把角色、头发、尾巴、武器、配件都拆成独立元素...",
+    negativePlaceholder: "例如：不要合并相邻道具、保留原始位置和比例...",
   };
 
   const meta = modeLabels[state.mode] || modeLabels.generate;
@@ -678,7 +691,7 @@ async function runGeneration() {
   }
 
   const rawPrompt = $("promptInput").value.trim();
-  if (!rawPrompt && state.mode !== "cutout") {
+  if (!rawPrompt && state.mode !== "cutout" && state.mode !== "split") {
     setStatus("请先输入提示词");
     return;
   }
@@ -760,6 +773,28 @@ async function runGeneration() {
       setProgress(52, true);
       setStatus("正在调用抠抠图同步抠图 API...");
       items = [await requestKoukoutuCutout(settings, cutout.image)];
+    } else if (state.mode === "split") {
+      setProgress(18, true);
+      const docSize = getDocumentSize();
+      const fullRect = { left: 0, top: 0, right: docSize.width, bottom: docSize.height, width: docSize.width, height: docSize.height };
+      setStatus("正在导出当前画布给 gpt-image-2 拆图...");
+      const image = await exportActiveDocumentAsBase64();
+      const splitSettings = {
+        ...settings,
+        model: "gpt-image-2",
+        count: 1,
+        format: "png",
+        quality: "auto",
+      };
+      outputSize = `${docSize.width} x ${docSize.height}`;
+      targetRect = fullRect;
+      placementRect = fullRect;
+      setProgress(45, true);
+      const splitPrompt = buildSplitImagePrompt(rawPrompt);
+      const splitCanvasItems = await requestEdits(splitSettings, splitPrompt, image, null, { size: "auto" });
+      setProgress(78, true);
+      setStatus("gpt-image-2 已返回，正在把透明元素拆成独立图层...");
+      items = await splitGeneratedImageIntoElementItems(splitCanvasItems[0], docSize);
     }
 
     const stamped = (items || []).map((item, index) => ({
@@ -773,9 +808,11 @@ async function runGeneration() {
       size: outputSize,
       quality: settings.quality,
       format: item.format || settings.format,
-      targetRect,
-      placementRect,
-      cropRect: targetRect,
+      targetRect: item.targetRect || targetRect,
+      placementRect: item.placementRect || placementRect,
+      cropRect: state.mode === "split" ? null : (item.cropRect || targetRect),
+      splitIndex: item.splitIndex || null,
+      splitBounds: item.splitBounds || null,
       createdAt: new Date().toISOString(),
     }));
 
@@ -807,12 +844,22 @@ async function runGeneration() {
         console.error("[inpaint] auto place failed", error);
         setStatus(`已生成，但自动放回图层失败：${error.message || error}。请点击下方"导入"`);
       }
+    } else if (state.mode === "split" && stamped.length) {
+      setProgress(92, true);
+      setStatus(`正在把 ${stamped.length} 个拆图元素放回 Photoshop 图层...`);
+      for (let index = 0; index < stamped.length; index += 1) {
+        const item = stamped[index];
+        await placeResultAsLayer(item, item.placementRect || item.targetRect, `Split Element ${index + 1}`, null, { preserveImageAspect: true });
+        setProgress(92 + Math.round(((index + 1) / stamped.length) * 7), true);
+      }
     }
     setProgress(100, true);
     setStatus(state.mode === "cutout"
       ? "完成：已创建抠图图层并放回原位置"
       : state.mode === "inpaint"
       ? "完成：已作为新图层放回选区，原图未变"
+      : state.mode === "split"
+      ? `完成：已用 gpt-image-2 拆出 ${stamped.length} 个独立图层`
       : `完成：生成 ${stamped.length} 张`);
   } catch (error) {
     console.error(error);
@@ -943,6 +990,19 @@ async function requestSingleGeneration(settings, prompt) {
   }, "文生图请求");
 
   return parseOpenAIImageResponse(response);
+}
+
+function buildSplitImagePrompt(userPrompt) {
+  const extra = String(userPrompt || "").trim();
+  return [
+    "Analyze the input Photoshop image and identify every distinct visible element/object.",
+    "Create a clean PNG with transparent background.",
+    "Keep each element at its original position, original scale, and original visual style.",
+    "Remove only the background or empty canvas. Do not add labels, numbers, grids, shadows, outlines, or new objects.",
+    "Do not merge separate props, body parts, accessories, weapons, tails, hair pieces, or UI sprites if they are visually distinct.",
+    "The returned image should preserve the same overall canvas composition so a script can split the transparent PNG into separate Photoshop layers.",
+    extra ? `User split notes: ${extra}` : "",
+  ].filter(Boolean).join("\n");
 }
 
 async function requestEdits(settings, prompt, imageB64, maskB64, options = {}) {
@@ -2123,6 +2183,209 @@ async function exportDocumentRegionAsBase64(rect, outputSize) {
   return arrayBufferToBase64(buffer);
 }
 
+async function splitGeneratedImageIntoElementItems(sourceItem, docSize) {
+  if (!sourceItem) {
+    throw new Error("gpt-image-2 没有返回可拆分的图片");
+  }
+
+  const source = await imageItemToRgba(sourceItem, docSize);
+  const { width, height, rgba } = source;
+  const { mask, workingRgba } = createSplitForegroundMask(rgba, width, height);
+  const minArea = Math.max(80, Math.floor(width * height * 0.00008));
+  const components = findSplitComponents(mask, width, height, minArea).slice(0, MAX_SPLIT_LAYERS);
+
+  if (!components.length) {
+    throw new Error("gpt-image-2 返回了图片，但没有检测到可拆分的独立元素");
+  }
+
+  const fullRect = {
+    left: 0,
+    top: 0,
+    right: docSize?.width || width,
+    bottom: docSize?.height || height,
+    width: docSize?.width || width,
+    height: docSize?.height || height,
+  };
+
+  return components.map((component, index) => {
+    const layerRgba = new Uint8Array(width * height * 4);
+    for (const pixelIndex of component.pixels) {
+      const offset = pixelIndex * 4;
+      layerRgba[offset] = workingRgba[offset];
+      layerRgba[offset + 1] = workingRgba[offset + 1];
+      layerRgba[offset + 2] = workingRgba[offset + 2];
+      layerRgba[offset + 3] = workingRgba[offset + 3];
+    }
+
+    return {
+      b64: bytesToBase64(encodePngRgba(width, height, layerRgba)),
+      format: "png",
+      splitIndex: index + 1,
+      splitBounds: component.bounds,
+      targetRect: fullRect,
+      placementRect: fullRect,
+    };
+  });
+}
+
+async function imageItemToRgba(item, targetSize = null) {
+  const b64 = item.importB64 || item.b64;
+  if (!b64) {
+    throw new Error("拆图结果缺少图片数据");
+  }
+
+  const image = await loadImage(`data:image/png;base64,${stripDataUrl(b64)}`);
+  const sourceWidth = Math.max(1, Math.round(image.width || image.naturalWidth || 1));
+  const sourceHeight = Math.max(1, Math.round(image.height || image.naturalHeight || 1));
+  const width = Math.max(1, Math.round(targetSize?.width || sourceWidth));
+  const height = Math.max(1, Math.round(targetSize?.height || sourceHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, width, height);
+  ctx.drawImage(image, 0, 0, width, height);
+  const imageData = ctx.getImageData(0, 0, width, height);
+  return { width, height, rgba: new Uint8Array(imageData.data) };
+}
+
+function createSplitForegroundMask(sourceRgba, width, height) {
+  const total = width * height;
+  const workingRgba = new Uint8Array(sourceRgba);
+  const mask = new Uint8Array(total);
+  let visible = 0;
+  let transparent = 0;
+
+  for (let index = 0; index < total; index += 1) {
+    const alpha = workingRgba[index * 4 + 3];
+    if (alpha > SPLIT_ALPHA_THRESHOLD) visible += 1;
+    if (alpha < 240) transparent += 1;
+  }
+
+  const hasUsefulAlpha = visible > 0 && visible < total * 0.98 && transparent > total * 0.02;
+  if (hasUsefulAlpha) {
+    for (let index = 0; index < total; index += 1) {
+      mask[index] = workingRgba[index * 4 + 3] > SPLIT_ALPHA_THRESHOLD ? 1 : 0;
+    }
+    return { mask, workingRgba };
+  }
+
+  const bg = estimateCornerBackgroundColor(workingRgba, width, height);
+  for (let index = 0; index < total; index += 1) {
+    const offset = index * 4;
+    const distance = colorDistance(workingRgba[offset], workingRgba[offset + 1], workingRgba[offset + 2], bg.r, bg.g, bg.b);
+    const isForeground = workingRgba[offset + 3] > SPLIT_ALPHA_THRESHOLD && distance > 42;
+    mask[index] = isForeground ? 1 : 0;
+    workingRgba[offset + 3] = isForeground ? 255 : 0;
+  }
+  return { mask, workingRgba };
+}
+
+function estimateCornerBackgroundColor(rgba, width, height) {
+  const sample = Math.max(4, Math.min(24, Math.floor(Math.min(width, height) / 12)));
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let count = 0;
+  const addSample = (x, y) => {
+    const offset = (y * width + x) * 4;
+    r += rgba[offset];
+    g += rgba[offset + 1];
+    b += rgba[offset + 2];
+    count += 1;
+  };
+
+  for (let y = 0; y < sample; y += 1) {
+    for (let x = 0; x < sample; x += 1) {
+      addSample(x, y);
+      addSample(width - 1 - x, y);
+      addSample(x, height - 1 - y);
+      addSample(width - 1 - x, height - 1 - y);
+    }
+  }
+
+  return {
+    r: Math.round(r / Math.max(1, count)),
+    g: Math.round(g / Math.max(1, count)),
+    b: Math.round(b / Math.max(1, count)),
+  };
+}
+
+function colorDistance(r1, g1, b1, r2, g2, b2) {
+  const dr = r1 - r2;
+  const dg = g1 - g2;
+  const db = b1 - b2;
+  return Math.sqrt(dr * dr + dg * dg + db * db);
+}
+
+function findSplitComponents(mask, width, height, minArea) {
+  const total = width * height;
+  const visited = new Uint8Array(total);
+  const queue = new Int32Array(total);
+  const components = [];
+
+  for (let start = 0; start < total; start += 1) {
+    if (!mask[start] || visited[start]) continue;
+
+    let head = 0;
+    let tail = 0;
+    const pixels = [];
+    let minX = width;
+    let minY = height;
+    let maxX = 0;
+    let maxY = 0;
+
+    queue[tail++] = start;
+    visited[start] = 1;
+
+    while (head < tail) {
+      const current = queue[head++];
+      pixels.push(current);
+      const x = current % width;
+      const y = Math.floor(current / width);
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+
+      for (let dy = -1; dy <= 1; dy += 1) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= height) continue;
+        for (let dx = -1; dx <= 1; dx += 1) {
+          if (!dx && !dy) continue;
+          const nx = x + dx;
+          if (nx < 0 || nx >= width) continue;
+          const next = ny * width + nx;
+          if (mask[next] && !visited[next]) {
+            visited[next] = 1;
+            queue[tail++] = next;
+          }
+        }
+      }
+    }
+
+    if (pixels.length >= minArea) {
+      components.push({
+        pixels,
+        area: pixels.length,
+        bounds: {
+          left: minX,
+          top: minY,
+          right: maxX + 1,
+          bottom: maxY + 1,
+          width: maxX - minX + 1,
+          height: maxY - minY + 1,
+        },
+      });
+    }
+  }
+
+  return components
+    .sort((a, b) => b.area - a.area)
+    .slice(0, MAX_SPLIT_LAYERS)
+    .sort((a, b) => (a.bounds.top - b.bounds.top) || (a.bounds.left - b.bounds.left));
+}
+
 async function cropDocumentToRect(documentRef, rect) {
   const bounds = {
     left: rect.left,
@@ -2144,27 +2407,34 @@ async function importSelected() {
 
   try {
     setBusy(true);
+    const isSplitElement = item.mode === "split";
     const shouldForceCapturedSelection = isCapturedRegionResult(item);
-    const shouldFit = shouldForceCapturedSelection || $("fitSelectionInput").checked;
+    const shouldFit = isSplitElement || shouldForceCapturedSelection || $("fitSelectionInput").checked;
     const liveSelection = shouldFit && !shouldForceCapturedSelection && !item.placementRect && !item.targetRect
       ? await getSelectionInfo()
       : null;
-    const placementRect = shouldForceCapturedSelection
+    const placementRect = isSplitElement
+      ? (item.placementRect || item.targetRect)
+      : shouldForceCapturedSelection
       ? (item.placementRect || item.targetRect)
       : shouldFit
       ? (item.placementRect || item.targetRect || liveSelection)
       : null;
-    const cropRect = shouldForceCapturedSelection
+    const cropRect = isSplitElement
+      ? null
+      : shouldForceCapturedSelection
       ? item.mode === "reference" ? null : (item.cropRect || item.targetRect)
       : shouldFit ? item.cropRect : null;
     const layerName = item.mode === "cutout"
       ? "Koukoutu Cutout"
+      : isSplitElement
+      ? `Split Element ${item.splitIndex || ""}`.trim()
       : item.mode === "reference" && shouldForceCapturedSelection
       ? "OpenAI Reference"
       : shouldForceCapturedSelection
       ? "OpenAI Inpaint"
       : "OpenAI Image";
-    await placeResultAsLayer(item, placementRect, layerName, cropRect, { preserveImageAspect: item.mode === "cutout" });
+    await placeResultAsLayer(item, placementRect, layerName, cropRect, { preserveImageAspect: item.mode === "cutout" || isSplitElement });
     setStatus(shouldForceCapturedSelection ? "已按生成时选区裁切导入" : "已导入到当前文档");
   } catch (error) {
     console.error(error);
@@ -3192,6 +3462,8 @@ async function saveHistoryItem(item) {
       targetRect: item.targetRect || null,
       placementRect: item.placementRect || null,
       cropRect: item.cropRect || null,
+      splitIndex: item.splitIndex || null,
+      splitBounds: item.splitBounds || null,
       createdAt: item.createdAt,
     };
     const index = readJsonLocal(HISTORY_KEY, []);

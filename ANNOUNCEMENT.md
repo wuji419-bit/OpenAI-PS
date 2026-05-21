@@ -1,6 +1,7 @@
-# OpenAI Photoshop Generator v0.1.64 公告
+# OpenAI Photoshop Generator v0.1.65 公告
 
 本次更新主要修复 Photoshop 面板里的抠图位置、按钮显示和设置页排版问题，并补充抠抠图官网入口。
+新增 `拆图` 模式：使用 `gpt-image-2` 先识别画面里的独立元素，再把返回的透明 PNG 自动拆成多个 Photoshop 图层。
 
 ## 更新内容
 
@@ -12,9 +13,10 @@
   - 官网：https://www.koukoutu.com/
   - API 文档：https://www.koukoutu.com/dev
 - 同步源插件目录和 Photoshop 运行目录，避免两边版本不一致导致按钮失效。
+- 新增拆图：当前画布会走 OpenAI 图片编辑接口和 `gpt-image-2`，插件再按透明元素自动分层放回 Photoshop。
 
 ## 使用提示
 
-更新后请关闭插件面板并重新打开；如果仍看到旧界面，请重启 Photoshop。新版界面顶部显示版本号 `v0.1.64`。
+更新后请关闭插件面板并重新打开；如果仍看到旧界面，请重启 Photoshop。新版界面顶部显示版本号 `v0.1.65`。
 
 抠图模式仍使用当前配置的抠抠图 API Key，不会改变已有密钥和接口设置。

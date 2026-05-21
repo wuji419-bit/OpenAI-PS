@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.65] - 2026-05-21
+
+### Added
+
+- Added a `拆图` mode that sends the current Photoshop canvas to `gpt-image-2`, asks it to isolate visible elements on a transparent PNG, then splits the returned elements into separate Photoshop layers.
+
 ## [0.1.64] - 2026-05-21
 
 ### Changed

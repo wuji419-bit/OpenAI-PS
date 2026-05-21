@@ -2260,7 +2260,7 @@ button:disabled {
   line-height: 1;
 }
 
-/* UXP-safe five-mode navigation. Photoshop's UXP webview can drop the buttons
+/* UXP-safe mode navigation. Photoshop's UXP webview can drop the buttons
    when the imported reference CSS uses grid here, so keep this bar on flex. */
 .mode-segmented {
   display: flex !important;
@@ -2273,13 +2273,13 @@ button:disabled {
 
 .mode-segmented button {
   display: block !important;
-  flex: 1 1 20% !important;
-  width: 20%;
+  flex: 1 1 16.666% !important;
+  width: auto;
   min-width: 0;
   height: 30px;
   margin: 0 1px;
-  padding: 0 2px;
-  font-size: 10.8px;
+  padding: 0 1px;
+  font-size: 10.2px;
   line-height: 30px;
   white-space: nowrap;
   visibility: visible !important;
