@@ -1278,6 +1278,7 @@ textarea:disabled {
   height: 260px;
   object-fit: contain;
   background: var(--surface-deep);
+  image-rendering: auto;
 }
 
 .selected-preview-meta {
@@ -1408,7 +1409,9 @@ textarea:disabled {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  padding: 6px;
+  background: var(--surface-deep);
   transition: transform 240ms var(--ease);
 }
 

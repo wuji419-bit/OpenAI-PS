@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.66] - 2026-05-21
+
+### Fixed
+
+- Cropped transparent result previews to visible pixels so cutout and split-layer thumbnails are large enough to inspect while preserving original import size and placement.
+
 ## [0.1.65] - 2026-05-21
 
 ### Added

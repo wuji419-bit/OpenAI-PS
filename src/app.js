@@ -822,6 +822,8 @@ async function runGeneration() {
 
     state.results = [...stamped, ...state.results];
     state.selectedId = stamped[0]?.id || state.selectedId;
+    setProgress(86, true);
+    await prepareCroppedPreviews(stamped);
     setProgress(88, true);
     renderResults();
     await Promise.all(stamped.map(saveHistoryItem));
@@ -2386,6 +2388,77 @@ function findSplitComponents(mask, width, height, minArea) {
     .sort((a, b) => (a.bounds.top - b.bounds.top) || (a.bounds.left - b.bounds.left));
 }
 
+async function prepareCroppedPreviews(items) {
+  for (const item of items || []) {
+    if (!item || item.previewB64 || item.url || !item.b64) continue;
+    try {
+      const preview = await createVisiblePixelPreview(item);
+      if (preview) {
+        item.previewB64 = preview.b64;
+        item.previewBounds = preview.bounds;
+      }
+    } catch (error) {
+      console.warn("cropped preview failed", error);
+    }
+  }
+}
+
+async function createVisiblePixelPreview(item) {
+  const source = await imageItemToRgba(item);
+  const { width, height, rgba } = source;
+  const bounds = getAlphaBounds(rgba, width, height, SPLIT_ALPHA_THRESHOLD);
+  if (!bounds) return null;
+
+  const totalArea = width * height;
+  const visibleArea = bounds.width * bounds.height;
+  if (visibleArea > totalArea * 0.86) return null;
+
+  const pad = Math.max(8, Math.round(Math.max(bounds.width, bounds.height) * 0.08));
+  const crop = {
+    left: Math.max(0, bounds.left - pad),
+    top: Math.max(0, bounds.top - pad),
+    right: Math.min(width, bounds.right + pad),
+    bottom: Math.min(height, bounds.bottom + pad),
+  };
+  crop.width = Math.max(1, crop.right - crop.left);
+  crop.height = Math.max(1, crop.bottom - crop.top);
+
+  const cropped = new Uint8Array(crop.width * crop.height * 4);
+  for (let y = 0; y < crop.height; y += 1) {
+    const sourceStart = ((crop.top + y) * width + crop.left) * 4;
+    const sourceEnd = sourceStart + crop.width * 4;
+    cropped.set(rgba.subarray(sourceStart, sourceEnd), y * crop.width * 4);
+  }
+
+  return {
+    b64: bytesToBase64(encodePngRgba(crop.width, crop.height, cropped)),
+    bounds: crop,
+  };
+}
+
+function getAlphaBounds(rgba, width, height, threshold) {
+  let left = width;
+  let top = height;
+  let right = 0;
+  let bottom = 0;
+  let found = false;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const alpha = rgba[(y * width + x) * 4 + 3];
+      if (alpha <= threshold) continue;
+      found = true;
+      if (x < left) left = x;
+      if (y < top) top = y;
+      if (x + 1 > right) right = x + 1;
+      if (y + 1 > bottom) bottom = y + 1;
+    }
+  }
+
+  if (!found) return null;
+  return { left, top, right, bottom, width: right - left, height: bottom - top };
+}
+
 async function cropDocumentToRect(documentRef, rect) {
   const bounds = {
     left: rect.left,
@@ -2573,6 +2646,9 @@ async function resultToArrayBuffer(item, preferImport = false) {
 function resultToPreviewSrc(item) {
   if (item.url) return item.url;
   if (item.previewUrl) return item.previewUrl;
+  if (item.previewB64) {
+    return toDataUrl(item.previewB64, "png");
+  }
   if (item.b64) {
     const format = item.format || "png";
     try {
@@ -3464,6 +3540,8 @@ async function saveHistoryItem(item) {
       cropRect: item.cropRect || null,
       splitIndex: item.splitIndex || null,
       splitBounds: item.splitBounds || null,
+      previewB64: item.previewB64 || null,
+      previewBounds: item.previewBounds || null,
       createdAt: item.createdAt,
     };
     const index = readJsonLocal(HISTORY_KEY, []);
@@ -3483,7 +3561,12 @@ async function loadHistory() {
       try {
         const file = await folder.getEntry(record.fileName);
         const buffer = await file.read({ format: storage.formats.binary });
-        loaded.push({ ...record, b64: arrayBufferToBase64(buffer) });
+        loaded.push({
+          ...record,
+          b64: arrayBufferToBase64(buffer),
+          previewB64: record.previewB64 || null,
+          previewBounds: record.previewBounds || null,
+        });
       } catch (error) {
         console.warn("history entry missing", record.fileName);
       }
