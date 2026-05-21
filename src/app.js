@@ -296,9 +296,6 @@ function loadSettings() {
   $("editPathInput").value = settings.editPath;
   $("koukoutuApiKeyInput").value = settings.koukoutuApiKey || "";
   $("koukoutuFormatInput").value = settings.koukoutuFormat || "png";
-  $("koukoutuCropInput").checked = false;
-  $("koukoutuCropInput").disabled = true;
-  $("koukoutuCropInput").title = "自动放回 Photoshop 原位置时必须保留原图尺寸";
   $("koukoutuBorderInput").value = String(clampInteger(settings.koukoutuBorder, 0, 2, 0));
   $("sizeInput").value = settings.size;
   $("qualityInput").value = "auto";

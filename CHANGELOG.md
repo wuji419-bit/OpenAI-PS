@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.64] - 2026-05-21
+
+### Changed
+
+- Removed the Koukoutu auto-crop checkbox from settings because cutout placement now always preserves the original canvas/selection size.
+
 ## [0.1.63] - 2026-05-21
 
 ### Fixed
