@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.63] - 2026-05-21
+
+### Fixed
+
+- Replaced the top-right SVG-only settings icon with a visible text `设置` button for Photoshop UXP compatibility.
+
 ## [0.1.62] - 2026-05-21
 
 ### Added

@@ -2456,6 +2456,26 @@ button:disabled {
   text-decoration: none !important;
 }
 
+#settingsToggleBtn.settings-entry-button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 54px !important;
+  min-width: 54px !important;
+  height: 30px !important;
+  padding: 0 10px !important;
+  border: 1px solid var(--line-soft) !important;
+  border-radius: var(--radius-sm) !important;
+  background: var(--surface-panel) !important;
+  color: var(--text) !important;
+  -webkit-text-fill-color: var(--text) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  line-height: 30px !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
 /* UXP parameter layout: avoid label/form-field ghost boxes that Photoshop
    renders as wide empty blocks. */
 .parameter-section .parameter-grid {
