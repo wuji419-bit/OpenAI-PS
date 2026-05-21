@@ -22,6 +22,7 @@ const DEFAULT_BASE_URL = "http://127.0.0.1:49456/v1";
 const DEFAULT_COMFY_URL = "http://192.168.1.128:8188";
 const KOUKOUTU_SYNC_URL = "https://sync.koukoutu.com/v1/create";
 const DEFAULT_CUTOUT_ANALYSIS_MODEL = "gpt-5.4-mini";
+const DEFAULT_SEMANTIC_EDIT_MODEL = "gpt-5.4-mini";
 const COMFY_INPAINT_MAX_PIXELS = 1600 * 1600;
 const COMFY_INPAINT_MAX_EDGE = 1600;
 const MAX_BATCH_COUNT = 10;
@@ -43,6 +44,11 @@ const COMFY_WORKFLOWS = {
   },
 };
 const PROMPT_PRESETS = [
+  {
+    label: "局部角色替换",
+    prompt: "只把选区内被点名的角色替换为目标角色；保留椅子、底座、边框、背景、文字、数字、道具、阴影和UI图标结构完全不变；保持原来的2D卡通游戏图标风格。",
+    negative: "改变椅子，改变边框，改变文字，改变数字，新增装饰，重画整个模块，改变构图，改变颜色风格。",
+  },
   {
     label: "产品质感",
     prompt: "高级产品摄影，工作室布光，材质细节清晰，边缘干净，真实阴影。",
@@ -86,7 +92,98 @@ const state = {
 
 const CRC32_TABLE = createCrc32Table();
 
-const $ = (id) => document.getElementById(id);
+// Tolerant DOM lookup. Some UI elements (e.g. negative prompt input, preset
+// menu, several quick-action buttons) were removed during the v0.1.57 cleanup,
+// but the rest of the code still references them. To avoid a wave of null-checks
+// across the file, return a passive stub element when the id no longer exists —
+// reads return safe defaults, writes are no-ops, addEventListener is silent.
+const __stubElement = (() => {
+  const noop = () => {};
+  const noopList = Object.assign([], { item: () => null });
+  const stub = {
+    value: "",
+    textContent: "",
+    innerHTML: "",
+    innerText: "",
+    placeholder: "",
+    disabled: false,
+    checked: false,
+    hidden: true,
+    tagName: "STUB",
+    id: "",
+    className: "",
+    classList: {
+      add: noop,
+      remove: noop,
+      toggle: noop,
+      replace: noop,
+      contains: () => false,
+    },
+    style: new Proxy({}, { set: () => true, get: () => "" }),
+    dataset: {},
+    children: noopList,
+    childNodes: noopList,
+    firstChild: null,
+    firstElementChild: null,
+    lastChild: null,
+    lastElementChild: null,
+    parentNode: null,
+    parentElement: null,
+    nextSibling: null,
+    nextElementSibling: null,
+    previousSibling: null,
+    previousElementSibling: null,
+    addEventListener: noop,
+    removeEventListener: noop,
+    dispatchEvent: () => true,
+    appendChild: (n) => n,
+    append: noop,
+    prepend: noop,
+    insertBefore: (n) => n,
+    removeChild: (n) => n,
+    replaceChild: (n) => n,
+    remove: noop,
+    setAttribute: noop,
+    removeAttribute: noop,
+    getAttribute: () => null,
+    hasAttribute: () => false,
+    focus: noop,
+    blur: noop,
+    click: noop,
+    contains: () => false,
+    closest: () => null,
+    matches: () => false,
+    querySelector: () => null,
+    querySelectorAll: () => noopList,
+    getBoundingClientRect: () => ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 }),
+    scrollIntoView: noop,
+  };
+  // Catch-all proxy: any unknown property read returns the stub (chainable),
+  // any unknown function call is a noop. Prevents crashes when the codebase
+  // touches a property we didn't enumerate above.
+  return new Proxy(stub, {
+    get(target, prop) {
+      if (prop in target) return target[prop];
+      // Common pattern: el.someProp.foo — return a chainable callable.
+      const fn = function () { return undefined; };
+      fn.add = noop;
+      fn.remove = noop;
+      return fn;
+    },
+    set(target, prop, value) {
+      target[prop] = value;
+      return true;
+    },
+  });
+})();
+
+const $ = (id) => {
+  const element = document.getElementById(id);
+  if (!element && typeof console !== "undefined") {
+    console.warn("[OpenAI-PS] Missing UI element:", id);
+  }
+  return element || __stubElement;
+};
 
 document.addEventListener("DOMContentLoaded", init);
 
@@ -199,7 +296,9 @@ function loadSettings() {
   $("editPathInput").value = settings.editPath;
   $("koukoutuApiKeyInput").value = settings.koukoutuApiKey || "";
   $("koukoutuFormatInput").value = settings.koukoutuFormat || "png";
-  $("koukoutuCropInput").checked = Boolean(Number(settings.koukoutuCrop || 0));
+  $("koukoutuCropInput").checked = false;
+  $("koukoutuCropInput").disabled = true;
+  $("koukoutuCropInput").title = "自动放回 Photoshop 原位置时必须保留原图尺寸";
   $("koukoutuBorderInput").value = String(clampInteger(settings.koukoutuBorder, 0, 2, 0));
   $("sizeInput").value = settings.size;
   $("qualityInput").value = "auto";
@@ -308,7 +407,7 @@ function getSettings() {
     format: "png",
     koukoutuApiKey: $("koukoutuApiKeyInput").value.trim(),
     koukoutuFormat: $("koukoutuFormatInput").value || "png",
-    koukoutuCrop: $("koukoutuCropInput").checked ? 1 : 0,
+    koukoutuCrop: 0,
     koukoutuBorder: clampInteger($("koukoutuBorderInput").value, 0, 2, 0),
   };
 }
@@ -330,7 +429,7 @@ function updateModeUI() {
 
   $("outpaintControls").classList.toggle("hidden", state.mode !== "outpaint");
   $("sizeField").classList.toggle("hidden", state.mode === "inpaint" || state.mode === "cutout");
-  $("modeContextPanel").classList.toggle("hidden", state.mode === "generate");
+  $("modeContextPanel").classList.add("hidden");
   $("referenceContext").classList.toggle("hidden", state.mode !== "reference");
   $("selectionContext").classList.toggle(
     "hidden",
@@ -631,8 +730,12 @@ async function runGeneration() {
         throw new Error("请先用选区工具选中要重绘的区域");
       }
       setProgress(34, true);
+      const docSize = getDocumentSize();
+      setStatus("正在理解选区里真正要修改的主体...");
+      const editSelection = await resolveSemanticInpaintSelection(settings, prompt, selection, docSize);
+      setProgress(40, true);
       setStatus("正在导出选区上下文...");
-      const inpaint = await createInpaintInputs(selection, getDocumentSize(), settings.model);
+      const inpaint = await createInpaintInputs(editSelection, docSize, settings.model);
       outputSize = inpaint.displaySize;
       targetRect = inpaint.targetRect;
       placementRect = inpaint.placementRect;
@@ -691,11 +794,28 @@ async function runGeneration() {
     if (state.mode === "cutout" && stamped[0]) {
       setProgress(92, true);
       setStatus("正在把抠图结果放回原位置...");
-      await placeResultAsLayer(stamped[0], stamped[0].placementRect || stamped[0].targetRect, "Koukoutu Cutout", null);
+      await placeResultAsLayer(stamped[0], stamped[0].placementRect || stamped[0].targetRect, "Koukoutu Cutout", null, { preserveImageAspect: true });
+    } else if (state.mode === "inpaint" && stamped[0]) {
+      setProgress(92, true);
+      setStatus("正在把选区重绘结果作为图层放回...");
+      try {
+        // Place the layer to fit placementRect (the model received a padded
+        // area for context), then apply a rect mask at targetRect — PS hides
+        // everything outside the user's actual selection so the framed-out
+        // pixels are never visually replaced.
+        const placementRect = stamped[0].placementRect || stamped[0].targetRect;
+        const cropRect = stamped[0].cropRect || stamped[0].targetRect;
+        await placeResultAsLayer(stamped[0], placementRect, "OpenAI Inpaint", cropRect);
+      } catch (error) {
+        console.error("[inpaint] auto place failed", error);
+        setStatus(`已生成，但自动放回图层失败：${error.message || error}。请点击下方"导入"`);
+      }
     }
     setProgress(100, true);
     setStatus(state.mode === "cutout"
       ? "完成：已创建抠图图层并放回原位置"
+      : state.mode === "inpaint"
+      ? "完成：已作为新图层放回选区，原图未变"
       : `完成：生成 ${stamped.length} 张`);
   } catch (error) {
     console.error(error);
@@ -719,6 +839,9 @@ function getInpaintSettings(settings) {
 }
 
 function buildImageEditPrompt(prompt, mode) {
+  const constrainedPrompt = buildConstrainedImageEditPrompt(prompt, mode);
+  if (constrainedPrompt !== null) return constrainedPrompt;
+
   const modeGuidance = {
     reference: [
       "Use the provided Photoshop image as the primary visual reference.",
@@ -732,12 +855,14 @@ function buildImageEditPrompt(prompt, mode) {
       "When the request asks to remove an object, erase that object and fill the area naturally with the requested background or nearby visual context.",
     ],
     inpaint: [
-      "Use the provided Photoshop crop as the source image.",
-      "This is a local inpainting task, not a full-image redraw.",
-      "Only pixels inside the transparent mask may change. Treat every unmasked pixel as locked source material.",
-      "Keep the original background, scenery, composition, lighting, perspective, color palette, texture, and edges unchanged outside the mask.",
-      "If the request asks to remove UI, text, buttons, borders, panels, labels, icons, overlays, or other interface elements, remove only those foreground interface elements and reconstruct the hidden background from the surrounding original image.",
-      "Do not repaint, redesign, restyle, or reinterpret visible background areas. Blend the filled area into the original image context.",
+      "Surgical edit task. Make the smallest change possible to the provided source image.",
+      "Apply ONLY the change the user explicitly requests. Do not redesign, reinterpret, or reimagine the scene.",
+      "Every visual element the user does not explicitly tell you to change MUST stay pixel-identical: existing characters, props, furniture, decorations, backgrounds, frames, panels, text, numbers, icons, particles, lighting, shadows, color palette, line work, perspective, scale, and pixel-art / vector / illustration style.",
+      "Match the original art style and rendering exactly. Do not switch styles, do not upgrade resolution, do not change the brushwork or shading approach.",
+      "If the user names elements to preserve (e.g. \"don't change the throne\", \"keep the text\"), treat that as a hard constraint even if those elements sit inside the editable region.",
+      "If the user asks to replace one specific subject (e.g. \"replace the hero with a cat\"), only replace that one subject; leave every other element exactly as it was.",
+      "If the user asks to remove an element, erase only that element and fill its footprint with a faithful continuation of the surrounding original pixels.",
+      "Do not introduce new objects, text, or decorations the user did not request.",
     ],
     outpaint: [
       "Use the provided Photoshop image as the source image.",
@@ -746,9 +871,43 @@ function buildImageEditPrompt(prompt, mode) {
     ],
   };
 
-  const guidance = modeGuidance[mode];
-  if (!guidance) return prompt;
-  return `${guidance.join("\n")}\n\nUser edit request:\n${prompt}`;
+  // Pass the user's prompt through verbatim. Empirically, prepending engineering
+  // guidance ("preserve the rest", "only edit the masked region", etc.) hurts
+  // gpt-image-2's edit fidelity — the model latches onto the long English
+  // preamble and re-interprets the scene. The user's plain natural-language
+  // request alone produces much closer-to-intent results.
+  return prompt;
+}
+
+function buildConstrainedImageEditPrompt(prompt, mode) {
+  const userPrompt = String(prompt || "").trim();
+  if (!userPrompt) return "";
+
+  if (mode === "inpaint") {
+    return [
+      userPrompt,
+      "",
+      "Hard local edit lock: perform the smallest possible edit. Change only the exact subject or object named in the user request. Preserve every unmentioned visual element from the source image, even when it is inside the selected area: chair/throne, cushions, base, border/frame, background, props, bowls, icons, text, numbers, UI layout, shadows, lighting, line art, colors, scale, perspective, and the original 2D game-icon style. Do not redesign the module, do not replace the furniture, and do not add decorative objects.",
+    ].join("\n");
+  }
+
+  if (mode === "referenceNoMask" || mode === "reference") {
+    return [
+      userPrompt,
+      "",
+      "Preserve the source image composition, style, line art, color palette, lighting, scale, and all unrelated details. Make only the requested change.",
+    ].join("\n");
+  }
+
+  if (mode === "outpaint") {
+    return [
+      userPrompt,
+      "",
+      "Only extend the transparent canvas area. Preserve all original pixels and continue the same style naturally.",
+    ].join("\n");
+  }
+
+  return null;
 }
 
 async function requestGenerations(settings, prompt) {
@@ -848,7 +1007,7 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
       },
       body: form,
       timeoutMs: 12 * 60 * 1000,
-      forceXhr: false,
+      forceXhr: true,
     }, maskB64 ? "局部编辑请求" : "参考图编辑请求");
     setStatus(`模型已返回，正在读取 ${waitLabel} 图片数据...`);
     return await parseOpenAIImageResponse(response);
@@ -868,13 +1027,16 @@ async function requestKoukoutuCutout(settings, imageB64) {
   form.append("model_key", "background-removal");
   form.append("image_file", base64ToBlob(imageB64, "image/png"), "photoshop-input.png");
   form.append("output_format", outputFormat);
-  form.append("crop", String(settings.koukoutuCrop ? 1 : 0));
+  // Keep the returned PNG the same size as the exported Photoshop region.
+  // If the API crops to the subject bbox, it does not return the crop offset,
+  // so the layer cannot be placed back at the original canvas coordinates.
+  form.append("crop", "0");
   form.append("border", String(settings.koukoutuBorder || 0));
   form.append("stamp_crop", "0");
   form.append("response", "bytes");
 
   setProgress(64, true);
-  setStatus(`正在上传到抠抠图：${formatBytes(imageBytes)}，输出 ${outputFormat.toUpperCase()}`);
+  setStatus(`正在上传到抠抠图：${formatBytes(imageBytes)}，输出 ${outputFormat.toUpperCase()}，保持原图尺寸`);
   const response = await sendRequest(KOUKOUTU_SYNC_URL, {
     method: "POST",
     headers: {
@@ -1661,22 +1823,38 @@ async function compositeItemsWithOriginalMask(items, originalB64, maskB64) {
     }
     setStatus(`正在合成选区结果 ${position}/${total}，非选区保持原图...`);
     await yieldToUi();
-    const composite = await createInpaintCompositeImages(item.b64, originalB64, maskB64);
-    composited.push({
-      ...item,
-      b64: composite.previewB64,
-      importB64: composite.importB64,
-      format: "png",
-    });
+    try {
+      const composite = await createInpaintCompositeImages(item.b64, originalB64, maskB64);
+      composited.push({
+        ...item,
+        b64: composite.previewB64,
+        importB64: composite.importB64,
+        format: "png",
+      });
+    } catch (error) {
+      console.warn("[inpaint] composite step skipped, using raw model output:", error?.message || error);
+      setStatus(`合成失败(${error?.message || error})，已直接采用模型返回图`);
+      // Fallback: skip the canvas-based composite (UXP <img>/createImageBitmap
+      // can't decode the PNG here) and trust the model's mask-locked output.
+      composited.push({
+        ...item,
+        importB64: item.b64,
+        format: item.format || "png",
+      });
+    }
   }
   return composited;
 }
 
 async function createInpaintCompositeImages(generatedB64, originalB64, maskB64) {
-  setStatus("正在载入模型返回图与遮罩...");
+  setStatus("正在载入返回图(1/3 原图)...");
   await yieldToUi();
   const original = await loadImage(`data:image/png;base64,${stripDataUrl(originalB64)}`);
+  setStatus("正在载入返回图(2/3 模型输出)...");
+  await yieldToUi();
   const generated = await loadImage(`data:image/png;base64,${stripDataUrl(generatedB64)}`);
+  setStatus("正在载入返回图(3/3 蒙版)...");
+  await yieldToUi();
   const mask = await loadImage(`data:image/png;base64,${stripDataUrl(maskB64)}`);
   const width = original.naturalWidth || original.width;
   const height = original.naturalHeight || original.height;
@@ -1989,7 +2167,7 @@ async function importSelected() {
       : shouldForceCapturedSelection
       ? "OpenAI Inpaint"
       : "OpenAI Image";
-    await placeResultAsLayer(item, placementRect, layerName, cropRect);
+    await placeResultAsLayer(item, placementRect, layerName, cropRect, { preserveImageAspect: item.mode === "cutout" });
     setStatus(shouldForceCapturedSelection ? "已按生成时选区裁切导入" : "已导入到当前文档");
   } catch (error) {
     console.error(error);
@@ -2004,7 +2182,7 @@ function isCapturedRegionResult(item) {
     (isSelectionValid(item.placementRect) || isSelectionValid(item.targetRect));
 }
 
-async function placeResultAsLayer(item, selectionInfo, layerName, cropRect = null) {
+async function placeResultAsLayer(item, selectionInfo, layerName, cropRect = null, opts = {}) {
   const binary = await resultToArrayBuffer(item, true);
   const format = item.format || detectFormatFromResult(item) || "png";
   const imageSize = getPngSize(binary) || { width: 1024, height: 1024 };
@@ -2050,12 +2228,62 @@ async function placeResultAsLayer(item, selectionInfo, layerName, cropRect = nul
   }, { commandName: "Place OpenAI image" });
 
   if (isSelectionValid(selectionInfo) && importedLayer) {
-    await transformLayerToRect(importedLayer, selectionInfo);
+    if (opts.preserveImageAspect) {
+      // For cutout-style placement: the returned PNG often has transparent
+      // padding around the subject. Using layer.bounds (tight visible bbox)
+      // for scaling would stretch the subject because the bbox aspect ≠ the
+      // full PNG aspect. Scale by the *full* PNG dimensions instead and let
+      // the transparent margins land where they belong.
+      await transformLayerByImageAspect(importedLayer, imageSize, selectionInfo);
+    } else {
+      await transformLayerToRect(importedLayer, selectionInfo);
+    }
   }
 
   if (isSelectionValid(cropRect) && importedLayer) {
     await applyRectMaskToLayer(importedLayer, cropRect);
   }
+}
+
+async function transformLayerByImageAspect(layer, imageSize, targetRect) {
+  // Cutout (and similar) results: the API was given an exported region of the
+  // user's selection and returns a PNG at exactly the same pixel dimensions,
+  // with the subject at the same pixel positions and the rest made transparent.
+  // So we should place the layer 1:1 — NO scaling, just translate it so the
+  // full image rectangle lines up with the original selection rect. Doing any
+  // bounds-based or image-size-based scaling here would distort the subject.
+  const bounds = normalizeBounds(layer.boundsNoEffects || layer.bounds);
+  if (!bounds) return;
+
+  // placeEvent centers the image on the canvas (image center = canvas center).
+  // So the image's top-left is currently at (docWidth/2 - imageSize.width/2, docHeight/2 - imageSize.height/2).
+  // We want the image's top-left at (targetRect.left, targetRect.top).
+  const docSize = getDocumentSize();
+  const currentLeft = docSize.width / 2 - imageSize.width / 2;
+  const currentTop = docSize.height / 2 - imageSize.height / 2;
+  const dx = targetRect.left - currentLeft;
+  const dy = targetRect.top - currentTop;
+
+  if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+
+  await core.executeAsModal(async () => {
+    if (typeof layer.translate === "function") {
+      await layer.translate(dx, dy);
+    } else {
+      await action.batchPlay([
+        {
+          _obj: "move",
+          _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
+          to: {
+            _obj: "offset",
+            horizontal: { _unit: "pixelsUnit", _value: dx },
+            vertical: { _unit: "pixelsUnit", _value: dy },
+          },
+          _options: { dialogOptions: "dontDisplay" },
+        },
+      ], { synchronousExecution: true, modalBehavior: "execute" });
+    }
+  }, { commandName: "Place OpenAI cutout 1:1" });
 }
 
 async function resultToArrayBuffer(item, preferImport = false) {
@@ -2269,6 +2497,172 @@ async function createInpaintInputs(selection, docSize, model) {
   };
 }
 
+async function resolveSemanticInpaintSelection(settings, prompt, selection, docSize) {
+  if (!shouldUseSemanticInpaintSelection(prompt) || !settings.apiKey || !settings.baseUrl) {
+    return selection;
+  }
+
+  try {
+    const analysisSize = getSemanticSelectionAnalysisSize(selection);
+    const image = await exportDocumentRegionAsBase64(selection, analysisSize);
+    await saveDebugBase64Image("openai-last-semantic-selection.png", image);
+    const plan = await requestSemanticInpaintTargetPlan(settings, prompt, image);
+    const semanticRect = rectFromSemanticInpaintPlan(plan, selection, docSize);
+    if (!semanticRect) return selection;
+
+    const selectionArea = Math.max(1, selection.width * selection.height);
+    const semanticArea = Math.max(1, semanticRect.width * semanticRect.height);
+    if (semanticArea >= selectionArea * 0.92) {
+      return selection;
+    }
+
+    setStatus(`已将可编辑区域收缩到：${plan.target_description || "目标主体"}`);
+    return semanticRect;
+  } catch (error) {
+    console.warn("semantic inpaint selection failed", error);
+    return selection;
+  }
+}
+
+function shouldUseSemanticInpaintSelection(prompt) {
+  const value = String(prompt || "").toLowerCase();
+  return /替换|换成|改成|变成|人物|角色|小人|国王|英雄|主角|头像|主体|猫|狗|replace|change into|turn into|character|person|subject|cat|dog/.test(value);
+}
+
+function getSemanticSelectionAnalysisSize(selection) {
+  const sourceWidth = Math.max(1, Math.round(selection.width));
+  const sourceHeight = Math.max(1, Math.round(selection.height));
+  const maxEdge = 768;
+  const scale = Math.min(1, maxEdge / Math.max(sourceWidth, sourceHeight));
+  const size = normalizeFlexibleImageSize(sourceWidth * scale, sourceHeight * scale, {
+    multiple: 16,
+    minPixels: 128 * 128,
+    maxPixels: 768 * 768,
+    maxEdge: 768,
+    maxRatio: 8,
+  });
+  return parseImageSize(size);
+}
+
+async function requestSemanticInpaintTargetPlan(settings, prompt, imageB64) {
+  setStatus("正在用 GPT 识别选区里应被替换的主体...");
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      edit_mode: {
+        type: "string",
+        enum: ["subject_box", "use_user_selection"],
+      },
+      target_description: { type: "string" },
+      normalized_box: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          x: { type: "number" },
+          y: { type: "number" },
+          width: { type: "number" },
+          height: { type: "number" },
+        },
+        required: ["x", "y", "width", "height"],
+      },
+      confidence: { type: "number" },
+      reason: { type: "string" },
+    },
+    required: ["edit_mode", "target_description", "normalized_box", "confidence", "reason"],
+  };
+
+  const payload = {
+    model: DEFAULT_SEMANTIC_EDIT_MODEL,
+    input: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: [
+              "Return JSON only. Analyze this Photoshop selected region for a surgical image edit.",
+              `User request: ${String(prompt || "").trim()}`,
+              "If the user request names one subject/object to replace or transform, return edit_mode=subject_box and a tight bounding box around the CURRENT source subject/object that should be replaced.",
+              "Do not box preserved UI or scene elements such as chair/throne, cushions, frame, base, bowl, text, numbers, icons, background, props, shadows, or decorative borders unless the user explicitly asks to edit them.",
+              "If the whole selected region really should be edited, return edit_mode=use_user_selection and normalized_box covering the full image.",
+              "Coordinates must be normalized 0..1 relative to this image: x, y, width, height.",
+            ].join("\n"),
+          },
+          {
+            type: "input_image",
+            image_url: `data:image/png;base64,${stripDataUrl(imageB64)}`,
+            detail: "low",
+          },
+        ],
+      },
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "semantic_inpaint_target",
+        strict: true,
+        schema,
+      },
+    },
+  };
+
+  const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${settings.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  }, "GPT 选区主体识别");
+  if (!response.ok) return null;
+  return parseJsonFromResponseOutput(JSON.parse(await response.text()));
+}
+
+function parseJsonFromResponseOutput(json) {
+  if (json?.output_text) {
+    try {
+      return JSON.parse(json.output_text);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  const message = (json?.output || []).find((item) => item?.type === "message");
+  const text = (message?.content || []).find((item) => item?.type === "output_text")?.text;
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    return null;
+  }
+}
+
+function rectFromSemanticInpaintPlan(plan, selection, docSize) {
+  if (!plan || plan.edit_mode !== "subject_box" || plan.confidence < 0.55) {
+    return null;
+  }
+
+  const box = plan.normalized_box || {};
+  const x = clampNumber(box.x, 0, 1, 0);
+  const y = clampNumber(box.y, 0, 1, 0);
+  const width = clampNumber(box.width, 0, 1, 0);
+  const height = clampNumber(box.height, 0, 1, 0);
+  if (width <= 0.03 || height <= 0.03) return null;
+
+  const padX = Math.max(6, selection.width * width * 0.08);
+  const padY = Math.max(6, selection.height * height * 0.08);
+  const rect = {
+    left: selection.left + selection.width * x - padX,
+    top: selection.top + selection.height * y - padY,
+    right: selection.left + selection.width * (x + width) + padX,
+    bottom: selection.top + selection.height * (y + height) + padY,
+  };
+  rect.width = rect.right - rect.left;
+  rect.height = rect.bottom - rect.top;
+  return clampRectToDocument(roundRectToPixels(rect), docSize);
+}
+
 async function createReferenceRegionInputs(selection, docSize, model) {
   const targetRect = clampRectToDocument(cloneRect(selection), docSize);
   const placementRect = getInpaintPlacementRect(targetRect, docSize, model);
@@ -2312,6 +2706,13 @@ function getInpaintOutputSize(placementRect, apiSize, model) {
 }
 
 function getInpaintPlacementRect(targetRect, docSize, model) {
+  // Restore context padding so the model sees a margin around the selection
+  // and can blend the edit naturally. The mask passed to the API only marks
+  // targetRect as editable, so the model's edits stay inside the selection.
+  // The "framed-out content was changed" symptom is solved on the placement
+  // side instead: we place the full placementRect output as a layer, then
+  // apply a rect mask at targetRect — PS hides everything outside the user's
+  // selection, so original pixels outside it are never replaced.
   const contextualRect = expandRectForInpaintContext(targetRect, docSize);
   if (supportsFlexibleImageSize(model)) {
     return roundRectToPixels(contextualRect);
@@ -3276,10 +3677,119 @@ function readJsonLocal(key, fallback) {
 }
 
 function loadImage(src) {
+  return loadImageRobust(src);
+}
+
+function withTimeout(promise, ms, label) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`${label} timeout after ${ms}ms`));
+    }, ms);
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function loadImageRobust(src) {
+  const blob = await imageSourceToBlob(src);
+
+  if (typeof createImageBitmap === "function" && blob) {
+    try {
+      return await withTimeout(createImageBitmap(blob), 8000, "createImageBitmap");
+    } catch (error) {
+      console.warn("[loadImage] createImageBitmap failed:", error?.message || error);
+    }
+  } else {
+    console.warn("[loadImage] createImageBitmap unavailable", { hasBlob: Boolean(blob) });
+  }
+
+  if (blob && typeof URL !== "undefined" && URL.createObjectURL) {
+    try {
+      return await withTimeout(loadImageViaTag(blob, null, true), 8000, "<img> blob-url");
+    } catch (error) {
+      console.warn("[loadImage] <img> + blob URL failed:", error?.message || error);
+    }
+  }
+
+  try {
+    return await withTimeout(loadImageViaTag(null, src, false), 8000, "<img> data-url");
+  } catch (error) {
+    console.warn("[loadImage] <img> + data URL failed:", error?.message || error);
+    throw new Error(`无法解码 PNG（${error?.message || error}）。请把 UXP DevTools console 的 [loadImage] 日志贴给开发者。`);
+  }
+}
+
+async function imageSourceToBlob(src) {
+  if (!src || typeof src !== "string") return null;
+  if (src.startsWith("data:")) {
+    const match = src.match(/^data:([^;,]+)?(;base64)?,(.*)$/);
+    if (!match) return null;
+    const mime = match[1] || "image/png";
+    const isBase64 = Boolean(match[2]);
+    const payload = match[3] || "";
+    if (isBase64) {
+      try { return base64ToBlob(payload, mime); }
+      catch (error) { console.warn("[loadImage] base64ToBlob failed", error); return null; }
+    }
+    return new Blob([decodeURIComponent(payload)], { type: mime });
+  }
+  try {
+    const response = await fetch(src);
+    return await response.blob();
+  } catch (error) {
+    console.warn("[loadImage] fetch->blob failed", error);
+    return null;
+  }
+}
+
+function loadImageViaTag(blob, originalSrc, useBlobUrl) {
+  return new Promise((resolve, reject) => {
+    let url = null;
+    let settled = false;
+    const cleanup = () => {
+      if (url) { try { URL.revokeObjectURL(url); } catch (error) { /* ignore */ } }
+    };
     const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = reject;
-    image.src = src;
+    image.onload = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(image);
+    };
+    image.onerror = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error instanceof Error ? error : new Error("image load failed"));
+    };
+    try {
+      if (useBlobUrl && blob) {
+        url = URL.createObjectURL(blob);
+        image.src = url;
+      } else if (originalSrc) {
+        image.src = originalSrc;
+      } else {
+        cleanup();
+        reject(new Error("no source for <img>"));
+      }
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
   });
 }

@@ -1,7 +1,7 @@
 {
   "id": "com.local.openai.photoshop.generator",
   "name": "OpenAI Photoshop Generator",
-  "version": "0.1.49",
+  "version": "0.1.62",
   "manifestVersion": 5,
   "host": {
     "app": "PS",

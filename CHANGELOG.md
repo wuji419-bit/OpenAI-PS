@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.62] - 2026-05-21
+
+### Added
+
+- Added official Koukoutu website and API documentation links in the Koukoutu API settings section.
+- Added a user-facing Chinese release announcement for the Photoshop panel update.
+
+### Fixed
+
+- Fixed Koukoutu cutout placement drift by forcing the synchronous API response to keep the original canvas/selection size.
+- Reworked Photoshop UXP panel styling so mode tabs, settings buttons, parameter controls, and outpaint padding fields render in stable positions.
+- Removed the non-actionable mode explanation card from the main workflow to reduce visual clutter.
+- Synchronized the source plugin folder and the Photoshop `PluginsStorage` runtime copy for HTML, CSS, manifest version, and button binding behavior.
+
+## [0.1.56] - 2026-05-17
+
+### Changed
+
+- Added semantic target detection before selection repaint: when a prompt asks to replace a character or subject, GPT first locates the current source subject inside the selected region and the edit mask is shrunk to that box.
+- This makes broad module selections behave like ChatGPT-style surgical edits: chair/throne, base, frame, text, numbers, icons, props, and background stay outside the editable mask unless the prompt explicitly targets them.
+
+## [0.1.55] - 2026-05-17
+
+### Changed
+
+- Added a local-edit lock to selection repaint prompts so subject replacement requests preserve unmentioned UI/icon details inside the selected region.
+- Added a "局部角色替换" prompt preset for character swaps that should keep the chair, base, frame, text, props, lighting, and original 2D game-icon style unchanged.
+
 ## [0.1.49] - 2026-05-15
 
 ### Added
