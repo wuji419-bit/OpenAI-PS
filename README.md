@@ -4,8 +4,6 @@ OpenAI Photoshop Generator is an open-source Adobe Photoshop UXP plugin built wi
 
 The plugin is designed for fast creative loops: generate a draft, use the current canvas as a reference, repaint a rectangular selection, extend canvas edges, cut out transparent PNG layers, preview results, and place selected outputs back into the active Photoshop document.
 
-![Plugin preview](stitch-reference/desktop-capture-after-v019.png)
-
 ## Current Features
 
 - Text-to-image generation through the OpenAI Image API.
