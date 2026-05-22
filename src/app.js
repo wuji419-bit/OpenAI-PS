@@ -30,7 +30,7 @@ const MAX_SPLIT_LAYERS = 40;
 const SPLIT_ALPHA_THRESHOLD = 18;
 const MAX_SEMANTIC_SPLIT_TARGETS = 10;
 const DEFAULT_SEMANTIC_SPLIT_TARGETS = [
-  { label: "底框/外框", target: "the main base frame, outer border, beige/gold outline, panel shell, and background container only" },
+  { label: "底框/背景", target: "the complete clean base frame, outer border, panel shell, and background surface only; remove foreground icons/text/buttons and reconstruct the covered surface texture with no holes" },
   { label: "填充条", target: "the inner colored progress fill bar only, such as the red health/energy fill, including its highlights but excluding the frame" },
   { label: "顶部徽章", target: "the top badge, plate, icon, bone label, decorative emblem, or attached label shape only, excluding any text on it" },
   { label: "文字数字", target: "all visible text, numbers, letters, counters, labels, and glyphs only, excluding the plate or badge behind them" },
@@ -1085,6 +1085,7 @@ async function requestGptSplitTargets(settings, imageB64, docSize, userPrompt) {
               "For a game health bar, split the base frame, inner colored fill bar, top badge/plate, and text/numbers into separate elements.",
               "Always separate visible text/numbers from the badge, plate, button, panel, or icon behind them.",
               "Always separate progress/health/energy fill from the outer frame/container.",
+              "When the image has a panel, card, parchment, frame, slot background, or other base surface, include a clean base/background layer that removes foreground elements and reconstructs the covered surface so it has no holes.",
               "Do not include the plain white/transparent background as an element.",
               "Order elements from back to front when possible.",
               `Document size: ${docSize?.width || "unknown"} x ${docSize?.height || "unknown"}.`,
@@ -1175,16 +1176,39 @@ async function requestSemanticSplitLayers(settings, imageB64, docSize, targets) 
 }
 
 function buildSemanticSplitLayerPrompt(target, index, total) {
+  const isBaseLayer = isSemanticBaseLayer(target);
   return [
     "You are extracting one semantic Photoshop layer from the input image.",
     `Layer ${index + 1} of ${total}: ${target.label}.`,
     `Extract ONLY this target: ${target.target}.`,
     "Return a PNG with transparent background and the same canvas composition as the input image.",
     "Keep the extracted target at its original position, original scale, original shape, original colors, and original style.",
+    isBaseLayer
+      ? "This is a base/background/frame layer: remove foreground icons, text, buttons, badges, and labels from this layer, then reconstruct the hidden surface/texture underneath so the panel is continuous and has no holes."
+      : "",
     "Everything that is not this target must be fully transparent.",
-    "Do not crop, recenter, enlarge, move, redraw, relabel, add guides, add boxes, add text, or create a contact sheet.",
+    "Do not crop, recenter, enlarge, move, relabel, add guides, add boxes, add text, or create a contact sheet.",
+    isBaseLayer
+      ? "Only redraw/inpaint the covered base surface where foreground elements were removed; do not invent new decorations."
+      : "Do not redraw the target; preserve it exactly from the source image.",
     "If this target is not present in the image, return a fully transparent PNG.",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
+}
+
+function isSemanticBaseLayer(target) {
+  const label = String(target?.label || "").toLowerCase();
+  const description = String(target?.target || "").toLowerCase();
+  const nonBasePattern = /fill|progress|health|energy|bar only|text|number|glyph|badge|plate|icon|button|填充|进度|血条|红色条|文字|数字|徽章|图标|按钮|牌/;
+
+  if (/底框|外框|底板|背景|面板|边框|纸面|画板|base|background|frame|panel|container|surface|card|parchment|shell/.test(label)) {
+    return true;
+  }
+
+  if (nonBasePattern.test(description)) {
+    return false;
+  }
+
+  return /complete clean|base frame|outer border|panel shell|background surface|base surface|parchment surface|container only/.test(description);
 }
 
 async function requestEdits(settings, prompt, imageB64, maskB64, options = {}) {

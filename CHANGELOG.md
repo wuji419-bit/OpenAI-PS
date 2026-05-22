@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.71] - 2026-05-22
+
+### Changed
+
+- Updated semantic split prompts so base/background/frame layers are reconstructed as clean surfaces with foreground icons, text, and buttons removed, instead of returning a panel with holes.
+
 ## [0.1.70] - 2026-05-22
 
 ### Fixed
