@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.67] - 2026-05-22
+
+### Fixed
+
+- Made result previews much larger in the Photoshop panel: one-column result tiles and a taller selected preview, so cutout and split-layer outputs are inspectable.
+
 ## [0.1.66] - 2026-05-21
 
 ### Fixed
