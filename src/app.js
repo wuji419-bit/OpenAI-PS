@@ -817,6 +817,7 @@ async function runGeneration() {
       placementRect: item.placementRect || placementRect,
       cropRect: state.mode === "split" ? null : (item.cropRect || targetRect),
       splitIndex: item.splitIndex || null,
+      splitLabel: item.splitLabel || null,
       splitBounds: item.splitBounds || null,
       createdAt: new Date().toISOString(),
     }));

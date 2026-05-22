@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.70] - 2026-05-22
+
+### Fixed
+
+- Preserved semantic split labels through the full generation flow, so auto-placed Photoshop layers keep names such as `Split 1 血条底框`, `Split 2 红色条`, `Split 3 骨头牌`, and `Split 4 x10 字`.
+
 ## [0.1.69] - 2026-05-22
 
 ### Changed
