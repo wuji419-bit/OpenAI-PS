@@ -292,6 +292,7 @@ function loadSettings() {
     koukoutuFormat: "png",
     koukoutuCrop: 0,
     koukoutuBorder: 0,
+    splitMatte: "auto",
   };
 
   const stored = readJsonLocal(SETTINGS_KEY, {});
@@ -308,6 +309,7 @@ function loadSettings() {
   $("koukoutuApiKeyInput").value = settings.koukoutuApiKey || "";
   $("koukoutuFormatInput").value = settings.koukoutuFormat || "png";
   $("koukoutuBorderInput").value = String(clampInteger(settings.koukoutuBorder, 0, 2, 0));
+  $("splitMatteInput").value = ["auto", "black", "white"].includes(settings.splitMatte) ? settings.splitMatte : "auto";
   $("sizeInput").value = settings.size;
   $("qualityInput").value = "auto";
   $("countInput").value = clampInteger(settings.count, 1, MAX_BATCH_COUNT, 1);
@@ -417,6 +419,7 @@ function getSettings() {
     koukoutuFormat: $("koukoutuFormatInput").value || "png",
     koukoutuCrop: 0,
     koukoutuBorder: clampInteger($("koukoutuBorderInput").value, 0, 2, 0),
+    splitMatte: ["auto", "black", "white"].includes($("splitMatteInput").value) ? $("splitMatteInput").value : "auto",
   };
 }
 
@@ -437,6 +440,7 @@ function updateModeUI() {
 
   $("outpaintControls").classList.toggle("hidden", state.mode !== "outpaint");
   $("sizeField").classList.toggle("hidden", state.mode === "inpaint" || state.mode === "cutout" || state.mode === "split");
+  $("splitMatteField").classList.toggle("hidden", state.mode !== "split");
   $("modeContextPanel").classList.add("hidden");
   $("referenceContext").classList.toggle("hidden", state.mode !== "reference");
   $("selectionContext").classList.toggle(
@@ -689,7 +693,7 @@ async function runGeneration() {
     settings.model = "gpt-image-2";
     $("modelInput").value = settings.model;
   }
-  if (state.mode === "cutout" && !settings.koukoutuApiKey) {
+  if ((state.mode === "cutout" || state.mode === "split") && !settings.koukoutuApiKey) {
     setStatus("请先在设置里填写抠抠图 API Key");
     return;
   }
@@ -1121,7 +1125,7 @@ async function requestGptSplitTargets(settings, imageB64, docSize, userPrompt) {
       body: JSON.stringify(payload),
     }, "GPT 自动拆图元素识别");
     if (!response.ok) return [];
-    const plan = parseJsonFromResponseOutput(JSON.parse(await response.text()));
+    const plan = parseJsonFromResponseText(await response.text());
     return normalizeSemanticSplitTargets(plan?.elements || []);
   } catch (error) {
     console.warn("GPT split target analysis failed", error);
@@ -1156,29 +1160,50 @@ async function requestSemanticSplitLayers(settings, imageB64, docSize, targets) 
   for (let index = 0; index < total; index += 1) {
     const target = targets[index];
     setProgress(45 + Math.round((index / total) * 36), true);
-    setStatus(`正在用 gpt-image-2 抽取拆图层 ${index + 1}/${total}：${target.label}`);
-    const prompt = buildSemanticSplitLayerPrompt(target, index, total, docSize);
+    const matte = getSemanticSplitMatte(target, settings.splitMatte);
+    setStatus(`Extracting split layer ${index + 1}/${total}: ${target.label}`);
+    const prompt = buildSemanticSplitLayerPrompt(target, index, total, docSize, matte);
     const batch = await requestEdits(settings, prompt, imageB64, null, { size: "auto" });
-    const item = await normalizeSemanticSplitLayerItem(batch[0], docSize, target.label, index + 1);
+    const matteItem = batch[0];
+    if (!matteItem?.b64) {
+      continue;
+    }
+    setStatus(`Removing split layer matte ${index + 1}/${total}: ${target.label}`);
+    const cutoutItem = await requestKoukoutuCutout(settings, matteItem.b64);
+    const item = await normalizeSemanticSplitLayerItem(cutoutItem, docSize, target.label, index + 1);
     if (item) {
       results.push(item);
     }
   }
 
   if (!results.length) {
-    setStatus("语义拆图没有得到有效图层，正在尝试整体透明拆分...");
-    const fallbackPrompt = buildSplitImagePrompt(targets.map((target) => target.label).join("，"));
-    const fallback = await requestEdits(settings, fallbackPrompt, imageB64, null, { size: "auto" });
-    return splitGeneratedImageIntoElementItems(fallback[0], docSize);
+    throw new Error("拆图没有得到有效图层：请检查 OpenAI 中转、抠抠图 API Key，或换一张边缘更清晰的图重试");
   }
 
   return results;
 }
 
-function buildSemanticSplitLayerPrompt(target, index, total, docSize = null) {
+function getSemanticSplitMatte(target, choice = "auto") {
+  if (choice === "white") {
+    return { name: "white", hex: "#ffffff", rgb: "255,255,255" };
+  }
+  if (choice === "black") {
+    return { name: "black", hex: "#000000", rgb: "0,0,0" };
+  }
+  const value = `${target?.label || ""} ${target?.target || ""}`.toLowerCase();
+  if (/black|dark|shadow|outline|ink|text|number|glyph|letter/.test(value)) {
+    return { name: "white", hex: "#ffffff", rgb: "255,255,255" };
+  }
+  return { name: "black", hex: "#000000", rgb: "0,0,0" };
+}
+
+function buildSemanticSplitLayerPrompt(target, index, total, docSize = null, matte = null) {
   const isBaseLayer = isSemanticBaseLayer(target);
   const width = Math.max(1, Math.round(docSize?.width || 0));
   const height = Math.max(1, Math.round(docSize?.height || 0));
+  const matteName = matte?.name || "black";
+  const matteHex = matte?.hex || "#000000";
+  const matteRgb = matte?.rgb || "0,0,0";
   return [
     "You are extracting one semantic Photoshop layer from the input image.",
     `Layer ${index + 1} of ${total}: ${target.label}.`,
@@ -1186,17 +1211,18 @@ function buildSemanticSplitLayerPrompt(target, index, total, docSize = null) {
     width && height
       ? `Return a full-canvas PNG exactly ${width}x${height} pixels, matching the input canvas size.`
       : "Return a full-canvas PNG with the exact same pixel size as the input image.",
-    "Keep the extracted target at the original Photoshop canvas coordinates, with transparent pixels everywhere else.",
+    `Keep the extracted target at the original Photoshop canvas coordinates, with a pure ${matteName} matte background everywhere else.`,
+    `Use exactly ${matteHex} / RGB(${matteRgb}) for every non-target background pixel so a background-removal pass can remove it cleanly.`,
     "Keep the extracted target at its original position, original scale, original shape, original colors, and original style.",
     isBaseLayer
       ? "This is a base/background/frame layer: remove foreground icons, text, buttons, badges, and labels from this layer, then reconstruct the hidden surface/texture underneath so the panel is continuous and has no holes."
       : "",
-    "Everything that is not this target must be fully transparent.",
-    "Do not crop, trim transparent pixels, recenter, enlarge, move, relabel, add guides, add boxes, add text, or create a contact sheet.",
+    `Everything that is not this target must be the pure ${matteName} matte color, not checkerboard, not gray, not transparent, and not copied from the source.`,
+    "Do not crop, trim pixels, recenter, enlarge, move, relabel, add guides, add boxes, add text, or create a contact sheet.",
     isBaseLayer
       ? "Only redraw/inpaint the covered base surface where foreground elements were removed; do not invent new decorations."
       : "Do not redraw the target; preserve it exactly from the source image.",
-    "If this target is not present in the image, return a fully transparent PNG.",
+    `If this target is not present in the image, return only the pure ${matteName} matte canvas.`,
   ].filter(Boolean).join("\n");
 }
 
@@ -1582,8 +1608,7 @@ async function requestGptCutoutPlan(settings, imageB64, profile) {
       body: JSON.stringify(payload),
     }, "GPT 抠图策略识别");
     if (!response.ok) return null;
-    const json = JSON.parse(await response.text());
-    const plan = parseGptCutoutPlan(json);
+    const plan = parseJsonFromResponseText(await response.text());
     return plan ? normalizeGptCutoutPlan(plan, profile) : null;
   } catch (error) {
     console.warn("GPT cutout analysis failed", error);
@@ -3245,7 +3270,60 @@ async function requestSemanticInpaintTargetPlan(settings, prompt, imageB64) {
     body: JSON.stringify(payload),
   }, "GPT 选区主体识别");
   if (!response.ok) return null;
-  return parseJsonFromResponseOutput(JSON.parse(await response.text()));
+  return parseJsonFromResponseText(await response.text());
+}
+
+function parseJsonFromResponseText(rawText) {
+  const text = String(rawText || "").trim();
+  if (!text) return null;
+
+  if (/^(event|data):/m.test(text)) {
+    let completed = null;
+    let doneText = "";
+    const deltas = [];
+    text.split(/\r?\n/).forEach((line) => {
+      if (!line.startsWith("data:")) return;
+      const data = line.slice(5).trim();
+      if (!data || data === "[DONE]") return;
+      try {
+        const event = JSON.parse(data);
+        if (event?.type === "response.output_text.delta" && typeof event.delta === "string") {
+          deltas.push(event.delta);
+        } else if (event?.type === "response.output_text.done" && typeof event.text === "string") {
+          doneText = event.text;
+        } else if (event?.type === "response.completed" && event.response) {
+          completed = parseJsonFromResponseOutput(event.response) || completed;
+        }
+      } catch (error) {
+        // Ignore malformed SSE data lines; later events often contain the full payload.
+      }
+    });
+    return completed || parseJsonFromLooseText(doneText || deltas.join(""));
+  }
+
+  try {
+    const json = JSON.parse(text);
+    return parseJsonFromResponseOutput(json) || json;
+  } catch (error) {
+    return parseJsonFromLooseText(text);
+  }
+}
+
+function parseJsonFromLooseText(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidate = fenced?.[1] || raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
+    if (!candidate || candidate === raw) return null;
+    try {
+      return JSON.parse(candidate);
+    } catch (innerError) {
+      return null;
+    }
+  }
 }
 
 function parseJsonFromResponseOutput(json) {

@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.73] - 2026-05-22
+
+### Changed
+
+- Updated semantic split mode to generate each layer on a selectable solid matte background (`auto`, black, or white), then send that matte image through Koukoutu background removal before importing the transparent layer back into Photoshop.
+- Added a split matte selector to the Photoshop panel so users can force black or white backing when checking difficult edges instead of relying on a fixed background.
+- Made split and semantic analysis tolerate local `/responses` SSE payloads from the `127.0.0.1:49456/v1` relay.
+
 ## [0.1.72] - 2026-05-22
 
 ### Changed
