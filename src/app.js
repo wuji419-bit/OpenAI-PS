@@ -1157,7 +1157,7 @@ async function requestSemanticSplitLayers(settings, imageB64, docSize, targets) 
     const target = targets[index];
     setProgress(45 + Math.round((index / total) * 36), true);
     setStatus(`正在用 gpt-image-2 抽取拆图层 ${index + 1}/${total}：${target.label}`);
-    const prompt = buildSemanticSplitLayerPrompt(target, index, total);
+    const prompt = buildSemanticSplitLayerPrompt(target, index, total, docSize);
     const batch = await requestEdits(settings, prompt, imageB64, null, { size: "auto" });
     const item = await normalizeSemanticSplitLayerItem(batch[0], docSize, target.label, index + 1);
     if (item) {
@@ -1175,19 +1175,24 @@ async function requestSemanticSplitLayers(settings, imageB64, docSize, targets) 
   return results;
 }
 
-function buildSemanticSplitLayerPrompt(target, index, total) {
+function buildSemanticSplitLayerPrompt(target, index, total, docSize = null) {
   const isBaseLayer = isSemanticBaseLayer(target);
+  const width = Math.max(1, Math.round(docSize?.width || 0));
+  const height = Math.max(1, Math.round(docSize?.height || 0));
   return [
     "You are extracting one semantic Photoshop layer from the input image.",
     `Layer ${index + 1} of ${total}: ${target.label}.`,
     `Extract ONLY this target: ${target.target}.`,
-    "Return a PNG with transparent background and the same canvas composition as the input image.",
+    width && height
+      ? `Return a full-canvas PNG exactly ${width}x${height} pixels, matching the input canvas size.`
+      : "Return a full-canvas PNG with the exact same pixel size as the input image.",
+    "Keep the extracted target at the original Photoshop canvas coordinates, with transparent pixels everywhere else.",
     "Keep the extracted target at its original position, original scale, original shape, original colors, and original style.",
     isBaseLayer
       ? "This is a base/background/frame layer: remove foreground icons, text, buttons, badges, and labels from this layer, then reconstruct the hidden surface/texture underneath so the panel is continuous and has no holes."
       : "",
     "Everything that is not this target must be fully transparent.",
-    "Do not crop, recenter, enlarge, move, relabel, add guides, add boxes, add text, or create a contact sheet.",
+    "Do not crop, trim transparent pixels, recenter, enlarge, move, relabel, add guides, add boxes, add text, or create a contact sheet.",
     isBaseLayer
       ? "Only redraw/inpaint the covered base surface where foreground elements were removed; do not invent new decorations."
       : "Do not redraw the target; preserve it exactly from the source image.",

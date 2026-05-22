@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.72] - 2026-05-22
+
+### Changed
+
+- Strengthened semantic split prompts so every returned layer must be a full-canvas PNG at the original document size and original coordinates, allowing Photoshop to stack the split layers back into the exact source layout.
+
 ## [0.1.71] - 2026-05-22
 
 ### Changed
