@@ -28,6 +28,7 @@ const COMFY_INPAINT_MAX_EDGE = 1600;
 const MAX_BATCH_COUNT = 10;
 const MAX_SPLIT_LAYERS = 40;
 const SPLIT_ALPHA_THRESHOLD = 18;
+const MAX_SEMANTIC_SPLIT_TARGETS = 10;
 const DEFAULT_SEMANTIC_SPLIT_TARGETS = [
   { label: "底框/外框", target: "the main base frame, outer border, beige/gold outline, panel shell, and background container only" },
   { label: "填充条", target: "the inner colored progress fill bar only, such as the red health/energy fill, including its highlights but excluding the frame" },
@@ -796,8 +797,8 @@ async function runGeneration() {
       outputSize = `${docSize.width} x ${docSize.height}`;
       targetRect = fullRect;
       placementRect = fullRect;
-      setProgress(45, true);
-      const splitTargets = buildSemanticSplitTargets(rawPrompt);
+      setProgress(34, true);
+      const splitTargets = await resolveSemanticSplitTargets(settings, image, docSize, rawPrompt);
       items = await requestSemanticSplitLayers(splitSettings, image, docSize, splitTargets);
     }
 
@@ -1011,22 +1012,139 @@ function buildSplitImagePrompt(userPrompt) {
   ].filter(Boolean).join("\n");
 }
 
-function buildSemanticSplitTargets(userPrompt) {
+async function resolveSemanticSplitTargets(settings, imageB64, docSize, userPrompt) {
+  const explicit = buildExplicitSemanticSplitTargets(userPrompt);
+  if (explicit.length >= 2) {
+    return explicit;
+  }
+
+  const autoTargets = await requestGptSplitTargets(settings, imageB64, docSize, userPrompt);
+  if (autoTargets.length >= 2) {
+    return autoTargets;
+  }
+
+  return DEFAULT_SEMANTIC_SPLIT_TARGETS;
+}
+
+function buildExplicitSemanticSplitTargets(userPrompt) {
   const text = String(userPrompt || "").trim();
+  if (!text) return [];
+
   const explicit = text
     .split(/[\n,，、;；|/]+/g)
     .map((value) => value.trim())
     .filter((value) => value.length >= 2)
-    .slice(0, 12);
+    .slice(0, MAX_SEMANTIC_SPLIT_TARGETS);
 
-  if (explicit.length >= 2) {
-    return explicit.map((target, index) => ({
-      label: target.slice(0, 24) || `元素${index + 1}`,
-      target,
-    }));
+  return explicit.map((target, index) => ({
+    label: target.slice(0, 24) || `元素${index + 1}`,
+    target,
+  }));
+}
+
+async function requestGptSplitTargets(settings, imageB64, docSize, userPrompt) {
+  if (!settings.apiKey || !settings.baseUrl) {
+    return [];
   }
 
-  return DEFAULT_SEMANTIC_SPLIT_TARGETS;
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      elements: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            label: { type: "string" },
+            target: { type: "string" },
+            reason: { type: "string" },
+          },
+          required: ["label", "target", "reason"],
+        },
+      },
+      confidence: { type: "number" },
+    },
+    required: ["elements", "confidence"],
+  };
+
+  const payload = {
+    model: DEFAULT_SEMANTIC_EDIT_MODEL,
+    input: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: [
+              "Return JSON only. Identify Photoshop layers for semantic image splitting.",
+              "The user wants automatic asset decomposition, not connected-component splitting.",
+              "Find separate UI/art elements that a designer would expect as independent layers, even when the pixels touch.",
+              "For a game health bar, split the base frame, inner colored fill bar, top badge/plate, and text/numbers into separate elements.",
+              "Always separate visible text/numbers from the badge, plate, button, panel, or icon behind them.",
+              "Always separate progress/health/energy fill from the outer frame/container.",
+              "Do not include the plain white/transparent background as an element.",
+              "Order elements from back to front when possible.",
+              `Document size: ${docSize?.width || "unknown"} x ${docSize?.height || "unknown"}.`,
+              `Optional user hint: ${String(userPrompt || "").trim() || "(none)"}`,
+            ].join("\n"),
+          },
+          {
+            type: "input_image",
+            image_url: `data:image/png;base64,${stripDataUrl(imageB64)}`,
+            detail: "low",
+          },
+        ],
+      },
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "semantic_split_targets",
+        strict: true,
+        schema,
+      },
+    },
+  };
+
+  try {
+    setStatus("正在自动识别画面里应该拆开的元素...");
+    const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${settings.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    }, "GPT 自动拆图元素识别");
+    if (!response.ok) return [];
+    const plan = parseJsonFromResponseOutput(JSON.parse(await response.text()));
+    return normalizeSemanticSplitTargets(plan?.elements || []);
+  } catch (error) {
+    console.warn("GPT split target analysis failed", error);
+    return [];
+  }
+}
+
+function normalizeSemanticSplitTargets(elements) {
+  if (!Array.isArray(elements)) return [];
+
+  const seen = new Set();
+  return elements
+    .map((item, index) => {
+      const label = String(item?.label || "").trim().slice(0, 24) || `元素${index + 1}`;
+      const target = String(item?.target || item?.label || "").trim();
+      return { label, target };
+    })
+    .filter((item) => item.target.length >= 2)
+    .filter((item) => {
+      const key = item.label.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, MAX_SEMANTIC_SPLIT_TARGETS);
 }
 
 async function requestSemanticSplitLayers(settings, imageB64, docSize, targets) {

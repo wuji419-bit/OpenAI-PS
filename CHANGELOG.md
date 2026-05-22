@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.69] - 2026-05-22
+
+### Changed
+
+- Split mode now asks the vision model to identify semantic UI/art layers automatically before calling `gpt-image-2`, so users do not need to type targets like frame, fill bar, badge, and text manually.
+
 ## [0.1.68] - 2026-05-22
 
 ### Changed
