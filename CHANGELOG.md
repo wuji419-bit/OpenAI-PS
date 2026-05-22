@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.68] - 2026-05-22
+
+### Changed
+
+- Changed split mode from connected-component splitting to semantic `gpt-image-2` layer extraction, so connected UI parts can become separate layers such as frame, fill bar, badge, and text.
+
 ## [0.1.67] - 2026-05-22
 
 ### Fixed

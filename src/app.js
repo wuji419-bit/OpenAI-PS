@@ -28,6 +28,13 @@ const COMFY_INPAINT_MAX_EDGE = 1600;
 const MAX_BATCH_COUNT = 10;
 const MAX_SPLIT_LAYERS = 40;
 const SPLIT_ALPHA_THRESHOLD = 18;
+const DEFAULT_SEMANTIC_SPLIT_TARGETS = [
+  { label: "底框/外框", target: "the main base frame, outer border, beige/gold outline, panel shell, and background container only" },
+  { label: "填充条", target: "the inner colored progress fill bar only, such as the red health/energy fill, including its highlights but excluding the frame" },
+  { label: "顶部徽章", target: "the top badge, plate, icon, bone label, decorative emblem, or attached label shape only, excluding any text on it" },
+  { label: "文字数字", target: "all visible text, numbers, letters, counters, labels, and glyphs only, excluding the plate or badge behind them" },
+  { label: "装饰高光", target: "small decorative highlights, sparkles, shine strokes, glows, and accents only if they are visually separate from the main frame and fill" },
+];
 const COMFY_WORKFLOWS = {
   "comfy:basic-inpaint": {
     label: "ComfyUI Basic Inpaint",
@@ -790,11 +797,8 @@ async function runGeneration() {
       targetRect = fullRect;
       placementRect = fullRect;
       setProgress(45, true);
-      const splitPrompt = buildSplitImagePrompt(rawPrompt);
-      const splitCanvasItems = await requestEdits(splitSettings, splitPrompt, image, null, { size: "auto" });
-      setProgress(78, true);
-      setStatus("gpt-image-2 已返回，正在把透明元素拆成独立图层...");
-      items = await splitGeneratedImageIntoElementItems(splitCanvasItems[0], docSize);
+      const splitTargets = buildSemanticSplitTargets(rawPrompt);
+      items = await requestSemanticSplitLayers(splitSettings, image, docSize, splitTargets);
     }
 
     const stamped = (items || []).map((item, index) => ({
@@ -851,7 +855,7 @@ async function runGeneration() {
       setStatus(`正在把 ${stamped.length} 个拆图元素放回 Photoshop 图层...`);
       for (let index = 0; index < stamped.length; index += 1) {
         const item = stamped[index];
-        await placeResultAsLayer(item, item.placementRect || item.targetRect, `Split Element ${index + 1}`, null, { preserveImageAspect: true });
+        await placeResultAsLayer(item, item.placementRect || item.targetRect, buildSplitLayerName(item, index + 1), null, { preserveImageAspect: true });
         setProgress(92 + Math.round(((index + 1) / stamped.length) * 7), true);
       }
     }
@@ -1005,6 +1009,63 @@ function buildSplitImagePrompt(userPrompt) {
     "The returned image should preserve the same overall canvas composition so a script can split the transparent PNG into separate Photoshop layers.",
     extra ? `User split notes: ${extra}` : "",
   ].filter(Boolean).join("\n");
+}
+
+function buildSemanticSplitTargets(userPrompt) {
+  const text = String(userPrompt || "").trim();
+  const explicit = text
+    .split(/[\n,，、;；|/]+/g)
+    .map((value) => value.trim())
+    .filter((value) => value.length >= 2)
+    .slice(0, 12);
+
+  if (explicit.length >= 2) {
+    return explicit.map((target, index) => ({
+      label: target.slice(0, 24) || `元素${index + 1}`,
+      target,
+    }));
+  }
+
+  return DEFAULT_SEMANTIC_SPLIT_TARGETS;
+}
+
+async function requestSemanticSplitLayers(settings, imageB64, docSize, targets) {
+  const results = [];
+  const total = Math.max(1, targets.length);
+
+  for (let index = 0; index < total; index += 1) {
+    const target = targets[index];
+    setProgress(45 + Math.round((index / total) * 36), true);
+    setStatus(`正在用 gpt-image-2 抽取拆图层 ${index + 1}/${total}：${target.label}`);
+    const prompt = buildSemanticSplitLayerPrompt(target, index, total);
+    const batch = await requestEdits(settings, prompt, imageB64, null, { size: "auto" });
+    const item = await normalizeSemanticSplitLayerItem(batch[0], docSize, target.label, index + 1);
+    if (item) {
+      results.push(item);
+    }
+  }
+
+  if (!results.length) {
+    setStatus("语义拆图没有得到有效图层，正在尝试整体透明拆分...");
+    const fallbackPrompt = buildSplitImagePrompt(targets.map((target) => target.label).join("，"));
+    const fallback = await requestEdits(settings, fallbackPrompt, imageB64, null, { size: "auto" });
+    return splitGeneratedImageIntoElementItems(fallback[0], docSize);
+  }
+
+  return results;
+}
+
+function buildSemanticSplitLayerPrompt(target, index, total) {
+  return [
+    "You are extracting one semantic Photoshop layer from the input image.",
+    `Layer ${index + 1} of ${total}: ${target.label}.`,
+    `Extract ONLY this target: ${target.target}.`,
+    "Return a PNG with transparent background and the same canvas composition as the input image.",
+    "Keep the extracted target at its original position, original scale, original shape, original colors, and original style.",
+    "Everything that is not this target must be fully transparent.",
+    "Do not crop, recenter, enlarge, move, redraw, relabel, add guides, add boxes, add text, or create a contact sheet.",
+    "If this target is not present in the image, return a fully transparent PNG.",
+  ].join("\n");
 }
 
 async function requestEdits(settings, prompt, imageB64, maskB64, options = {}) {
@@ -2230,6 +2291,55 @@ async function splitGeneratedImageIntoElementItems(sourceItem, docSize) {
   });
 }
 
+async function normalizeSemanticSplitLayerItem(sourceItem, docSize, label, splitIndex) {
+  if (!sourceItem) return null;
+
+  const source = await imageItemToRgba(sourceItem, docSize);
+  const { width, height, rgba } = source;
+  const { mask, workingRgba } = createSplitForegroundMask(rgba, width, height);
+  const bounds = getMaskBounds(mask, width, height);
+  if (!bounds) return null;
+
+  const minArea = Math.max(80, Math.floor(width * height * 0.00008));
+  if (bounds.area < minArea) return null;
+
+  const fullRect = {
+    left: 0,
+    top: 0,
+    right: docSize?.width || width,
+    bottom: docSize?.height || height,
+    width: docSize?.width || width,
+    height: docSize?.height || height,
+  };
+  const layerRgba = new Uint8Array(width * height * 4);
+
+  for (let index = 0; index < mask.length; index += 1) {
+    if (!mask[index]) continue;
+    const offset = index * 4;
+    layerRgba[offset] = workingRgba[offset];
+    layerRgba[offset + 1] = workingRgba[offset + 1];
+    layerRgba[offset + 2] = workingRgba[offset + 2];
+    layerRgba[offset + 3] = workingRgba[offset + 3] || 255;
+  }
+
+  return {
+    b64: bytesToBase64(encodePngRgba(width, height, layerRgba)),
+    format: "png",
+    splitIndex,
+    splitLabel: label,
+    splitBounds: {
+      left: bounds.left,
+      top: bounds.top,
+      right: bounds.right,
+      bottom: bounds.bottom,
+      width: bounds.width,
+      height: bounds.height,
+    },
+    targetRect: fullRect,
+    placementRect: fullRect,
+  };
+}
+
 async function imageItemToRgba(item, targetSize = null) {
   const b64 = item.importB64 || item.b64;
   if (!b64) {
@@ -2459,6 +2569,28 @@ function getAlphaBounds(rgba, width, height, threshold) {
   return { left, top, right, bottom, width: right - left, height: bottom - top };
 }
 
+function getMaskBounds(mask, width, height) {
+  let left = width;
+  let top = height;
+  let right = 0;
+  let bottom = 0;
+  let area = 0;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (!mask[y * width + x]) continue;
+      area += 1;
+      if (x < left) left = x;
+      if (y < top) top = y;
+      if (x + 1 > right) right = x + 1;
+      if (y + 1 > bottom) bottom = y + 1;
+    }
+  }
+
+  if (!area) return null;
+  return { left, top, right, bottom, width: right - left, height: bottom - top, area };
+}
+
 async function cropDocumentToRect(documentRef, rect) {
   const bounds = {
     left: rect.left,
@@ -2501,7 +2633,7 @@ async function importSelected() {
     const layerName = item.mode === "cutout"
       ? "Koukoutu Cutout"
       : isSplitElement
-      ? `Split Element ${item.splitIndex || ""}`.trim()
+      ? buildSplitLayerName(item, item.splitIndex)
       : item.mode === "reference" && shouldForceCapturedSelection
       ? "OpenAI Reference"
       : shouldForceCapturedSelection
@@ -2520,6 +2652,12 @@ async function importSelected() {
 function isCapturedRegionResult(item) {
   return (item?.mode === "inpaint" || item?.mode === "cutout" || item?.mode === "reference") &&
     (isSelectionValid(item.placementRect) || isSelectionValid(item.targetRect));
+}
+
+function buildSplitLayerName(item, fallbackIndex) {
+  const index = item?.splitIndex || fallbackIndex || "";
+  const label = String(item?.splitLabel || "").trim();
+  return label ? `Split ${index} ${label}` : `Split Element ${index}`.trim();
 }
 
 async function placeResultAsLayer(item, selectionInfo, layerName, cropRect = null, opts = {}) {
@@ -3539,6 +3677,7 @@ async function saveHistoryItem(item) {
       placementRect: item.placementRect || null,
       cropRect: item.cropRect || null,
       splitIndex: item.splitIndex || null,
+      splitLabel: item.splitLabel || null,
       splitBounds: item.splitBounds || null,
       previewB64: item.previewB64 || null,
       previewBounds: item.previewBounds || null,
