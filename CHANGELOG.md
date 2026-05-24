@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.74] - 2026-05-24
+
+### Fixed
+
+- Detect the current local `127.0.0.1:49456` relay state where `/responses` works but `/images/generations` and `/images/edits` return unsupported, and show a clear action message instead of a vague UXP `Network request failed`.
+- Stop falling back to raw model output when inpaint compositing fails, preventing whole-image edits from being shown or imported after a mask/composite failure.
+
 ## [0.1.73] - 2026-05-22
 
 ### Changed

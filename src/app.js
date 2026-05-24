@@ -983,6 +983,7 @@ async function requestGenerations(settings, prompt) {
 }
 
 async function requestSingleGeneration(settings, prompt) {
+  assertImageEndpointSupported(settings, settings.generationPath, "文生图");
   const payload = cleanObject({
     model: settings.model,
     prompt,
@@ -1015,6 +1016,23 @@ function buildSplitImagePrompt(userPrompt) {
     "The returned image should preserve the same overall canvas composition so a script can split the transparent PNG into separate Photoshop layers.",
     extra ? `User split notes: ${extra}` : "",
   ].filter(Boolean).join("\n");
+}
+
+function assertImageEndpointSupported(settings, route, actionLabel) {
+  const url = buildApiUrl(settings.baseUrl, route);
+  if (isCodexLocalResponsesOnlyImageEndpoint(url)) {
+    throw new Error(`${actionLabel}不可用：当前本地中转 ${safeUrlForMessage(url)} 今天只支持 /responses，不支持 /images/generations 或 /images/edits。请换成支持图片端点的 OpenAI 中转/官方 API，或恢复 Cockpit 的图片接口后再试。`);
+  }
+}
+
+function isCodexLocalResponsesOnlyImageEndpoint(url) {
+  try {
+    const parsed = new URL(url);
+    const isLocalRelay = /^(127\.0\.0\.1|localhost)$/i.test(parsed.hostname) && parsed.port === "49456";
+    return isLocalRelay && /^\/v1\/images\//i.test(parsed.pathname);
+  } catch (error) {
+    return false;
+  }
 }
 
 async function resolveSemanticSplitTargets(settings, imageB64, docSize, userPrompt) {
@@ -1260,6 +1278,7 @@ async function requestEdits(settings, prompt, imageB64, maskB64, options = {}) {
 }
 
 async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = {}) {
+  assertImageEndpointSupported(settings, settings.editPath, maskB64 ? "选区重绘" : "参考图编辑");
   const form = new FormData();
   const requestSize = options.size || settings.size;
   const imageBytes = estimateBase64Bytes(imageB64);
@@ -2125,7 +2144,8 @@ async function compositeItemsWithOriginalMask(items, originalB64, maskB64) {
         format: "png",
       });
     } catch (error) {
-      console.warn("[inpaint] composite step skipped, using raw model output:", error?.message || error);
+      console.warn("[inpaint] composite failed:", error?.message || error);
+      throw new Error(`选区重绘合成失败：${error?.message || error}。为避免整张图被模型误改，已阻止导入原始模型结果。`);
       setStatus(`合成失败(${error?.message || error})，已直接采用模型返回图`);
       // Fallback: skip the canvas-based composite (UXP <img>/createImageBitmap
       // can't decode the PNG here) and trust the model's mask-locked output.
@@ -2358,6 +2378,9 @@ function sendXhrRequest(url, options = {}) {
 
 function makeNetworkError(error, url, label) {
   const detail = error?.message || String(error || "Network request failed");
+  if (isCodexLocalResponsesOnlyImageEndpoint(url)) {
+    return new Error(`${label}失败：当前本地中转 ${safeUrlForMessage(url)} 不支持图片端点。它现在只能走 /responses，所以文生图、参考图编辑、选区重绘、扩图和拆图都会失败。请换成支持 /images 的中转或官方 OpenAI API。原始错误：${detail}`);
+  }
   return new Error(`${label}网络失败：${detail}。地址：${safeUrlForMessage(url)}`);
 }
 
