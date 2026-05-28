@@ -54,7 +54,7 @@
    - 编辑接口：`/images/edits`
    - 模型：`gpt-image-2`
 4. 本地转发服务示例：
-   - 服务地址：`http://127.0.0.1:51866/v1`
+   - 服务地址：`http://127.0.0.1:49456/v1`
    - 文生图接口：`/images/generations`
    - 编辑接口：`/images/edits`
    - API Key：填本地服务要求的密钥

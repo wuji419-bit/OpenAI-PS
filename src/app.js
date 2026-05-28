@@ -88,7 +88,7 @@ async function showOpenAiPanel() {
 const HISTORY_KEY = "openaiPhotoshop.history.v1";
 const SETTINGS_KEY = "openaiPhotoshop.settings.v1";
 const PROMPT_DRAFT_KEY = "openaiPhotoshop.promptDrafts.v1";
-const DEFAULT_BASE_URL = "http://127.0.0.1:51866/v1";
+const DEFAULT_BASE_URL = "http://127.0.0.1:49456/v1";
 const DEFAULT_COMFY_URL = "http://192.168.1.128:8188";
 const KOUKOUTU_SYNC_URL = "https://sync.koukoutu.com/v1/create";
 const DEFAULT_CUTOUT_ANALYSIS_MODEL = "gpt-5.4-mini";
@@ -893,6 +893,10 @@ async function runGeneration() {
   const runController = createAbortController();
   state.activeRequestController = runController;
   state.cancelRequested = false;
+  state.results = [];
+  state.selectedId = null;
+  state.outputView = "results";
+  renderResults();
   setBusy(true);
   setProgress(8, true);
 
@@ -1474,6 +1478,8 @@ function buildConstrainedImageEditPrompt(prompt, mode) {
     return [
       userPrompt,
       "",
+      ...ambiguityGuidance,
+      ...(ambiguityGuidance.length ? [""] : []),
       "Only extend the newly expanded canvas area. Preserve all original pixels and continue the same style naturally.",
     ].join("\n");
   }
@@ -1993,7 +1999,10 @@ function shouldUseSidecarImageEndpointsFirst(settings, hasMask = false) {
 
 function isCodexSidecarBaseUrl(baseUrl) {
   const value = normalizeBaseUrl(baseUrl).toLowerCase();
-  return value === "http://127.0.0.1:51866/v1" || value === "http://localhost:51866/v1";
+  return value === "http://127.0.0.1:49456/v1" ||
+    value === "http://localhost:49456/v1" ||
+    value === "http://127.0.0.1:51866/v1" ||
+    value === "http://localhost:51866/v1";
 }
 
 function shouldUseResponsesImageGenerationDirectly(settings, maskB64) {
@@ -7320,7 +7329,7 @@ function cleanObject(object) {
 
 function normalizeBaseUrl(value) {
   let url = String(value || "").trim().replace(/\/+$/, "");
-  url = url.replace(/^(https?:\/\/)(?:localhost|127\.0\.0\.1):(9456|49456)(\/|$)/i, `http://127.0.0.1:51866$3`);
+  url = url.replace(/^(https?:\/\/)(?:localhost|127\.0\.0\.1):9456(\/|$)/i, "http://127.0.0.1:49456$2");
   url = url.replace(/\/(?:chat\/completions|images\/generations|images\/edits|models)$/i, "");
   return url.replace(/\/+$/, "");
 }

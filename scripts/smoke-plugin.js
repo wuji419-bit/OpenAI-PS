@@ -227,7 +227,7 @@ async function runVmSmoke() {
         $(id).value = "";
       }
 
-      $("baseUrlInput").value = "http://127.0.0.1:51866/v1";
+      $("baseUrlInput").value = "http://127.0.0.1:49456/v1";
       $("apiKeyInput").value = "sk-test-key-abcdefghijklmnop";
       $("modelInput").value = "gpt-image-2";
       $("generationPathInput").value = "/images/generations";
@@ -321,9 +321,9 @@ async function runVmSmoke() {
 
       const explicit = buildExplicitSemanticSplitTargets("角色");
       assert(explicit.length === 1 && explicit[0].target === "角色", "Single split target should be accepted");
-      assert(DEFAULT_BASE_URL === "http://127.0.0.1:51866/v1", "Default Base URL should match Cockpit API service");
-      assert(normalizeBaseUrl("http://127.0.0.1:49456/v1") === "http://127.0.0.1:51866/v1", "Legacy 49456 Base URL should migrate");
-      assert(normalizeBaseUrl("http://localhost:9456/v1/images/edits") === "http://127.0.0.1:51866/v1", "Legacy 9456 image URL should migrate");
+      assert(DEFAULT_BASE_URL === "http://127.0.0.1:49456/v1", "Default Base URL should match the active Cockpit API service");
+      assert(normalizeBaseUrl("http://127.0.0.1:49456/v1") === "http://127.0.0.1:49456/v1", "Active 49456 Base URL should be preserved");
+      assert(normalizeBaseUrl("http://localhost:9456/v1/images/edits") === "http://127.0.0.1:49456/v1", "Legacy 9456 image URL should migrate to active 49456");
       assert(shouldUseSidecarImageEndpointsFirst(getSettings(), true), "Codex sidecar should prefer OpenAI-compatible image endpoints");
       assert(shouldPreserveUserInpaintSelection(getSettings()), "Sidecar inpaint should preserve the full user-drawn selection");
       assert(!shouldUseChatGptStyleResponsesEdit(getSettings(), true), "Codex sidecar masked edits should use /images/edits before direct Responses");

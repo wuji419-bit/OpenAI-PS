@@ -25,10 +25,10 @@ The user can override the base URL and endpoint paths for compatible local relay
 The current local Cockpit Tools API service default is:
 
 ```text
-http://127.0.0.1:51866/v1
+http://127.0.0.1:49456/v1
 ```
 
-Legacy local relay values using `9456` or `49456` are normalized to `51866` on load.
+Legacy local relay values using `9456` are normalized to the active Cockpit Tools port `49456` on load. Existing `49456` values are preserved.
 
 ## Output Handling
 

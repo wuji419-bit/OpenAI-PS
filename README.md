@@ -34,7 +34,7 @@ Model: gpt-image-2
 The plugin also supports local relay services that expose compatible image endpoints, for example:
 
 ```text
-Base URL: http://127.0.0.1:51866/v1
+Base URL: http://127.0.0.1:49456/v1
 Image generation: /images/generations
 Image edits: /images/edits
 ```

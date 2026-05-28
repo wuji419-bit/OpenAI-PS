@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.152] - 2026-05-28
+
+### Fixed
+
+- Restored the active Cockpit Tools local API port to `http://127.0.0.1:49456/v1` instead of migrating it to the currently unavailable `51866` port.
+- Treat `49456` as a Codex/Cockpit sidecar so masked image edits try `/images/edits` first before falling back to `/responses`.
+- Clear the current result grid at the start of each generation so a single new result is not mixed with stale thumbnails from previous runs.
+- Added prompt disambiguation for Chinese `弓` so local edits preserve the weapon/archery bow instead of generating a bow tie or ribbon.
+
 ## [0.1.105] - 2026-05-27
 
 ### Fixed
