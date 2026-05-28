@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.75] - 2026-05-28
+
+### Fixed
+
+- Removed the hard block for `127.0.0.1:49456/v1/images/*` so Cockpit Tools local API can handle image generation/edit requests when its image routes are available.
+- Updated network error text to surface Cockpit image-route/account/model checks without preventing requests from reaching the local relay.
+
 ## [0.1.74] - 2026-05-24
 
 ### Fixed

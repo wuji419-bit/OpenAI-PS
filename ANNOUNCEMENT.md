@@ -1,20 +1,15 @@
-﻿# OpenAI Photoshop Generator v0.1.74 公告
+# OpenAI Photoshop Generator v0.1.75 公告
 
-这次更新主要处理本地中转 `http://127.0.0.1:49456/v1` 今天只支持 `/responses`、不支持图片端点导致插件一直报错的问题。
+这次更新修正 `v0.1.74` 对 Cockpit Tools 本地 API 的判断：`http://127.0.0.1:49456/v1` 本来就可能提供图片生成能力，插件不应该提前拦截 `/images/generations` 和 `/images/edits`。
 
 ## 更新内容
 
-- 当本地 `49456` 中转不支持 `/images/generations` 或 `/images/edits` 时，插件会直接提示“当前中转不支持图片端点”，不再只显示 `Network request failed`。
-- `文生图`、`参考图`、`选区重绘`、`扩图`、`拆图` 都依赖图片端点；如果当前中转只剩 `/responses`，这些功能不能继续跑。
-- `选区重绘` 合成失败时，不再把模型原始返回图当成结果显示或导入，避免整张图被模型乱改后还被放回 Photoshop。
-- 版本号更新到 `v0.1.74`，并刷新前端缓存参数，方便确认 Photoshop 载入的是新版。
+- 撤掉对 `127.0.0.1:49456/v1/images/*` 的硬拦截，让请求真实发给 Cockpit Tools。
+- 文生图、参考图、选区重绘、扩图、拆图会继续走设置里的图片接口路径。
+- 如果 Cockpit 当前没有注册图片路由、账号没有图片模型权限，或模型不可用，插件会显示实际网络/HTTP 错误，并提示检查 Cockpit 图片生成开关、图片路由和 `gpt-image-2` 账号能力。
+- 保留 `选区重绘` 的合成失败保护，避免合成失败时把模型原始乱改图直接导回 Photoshop。
+- 版本号更新到 `v0.1.75`，并刷新前端缓存参数，方便确认 Photoshop 载入的是新版。
 
-## 当前机器检查结果
+## 当前说明
 
-我在本机测到：
-
-- `http://127.0.0.1:49456/v1/responses` 正常。
-- `http://127.0.0.1:49456/v1/images/generations` 返回 `404 endpoint not supported`。
-- `http://127.0.0.1:49456/v1/images/edits` 返回 `404 endpoint not supported`。
-
-所以这不是 Photoshop 选区的问题，而是当前中转没有图片生成/编辑接口。要继续用这些功能，需要换成支持 `/images` 的 OpenAI 中转或官方 OpenAI API。
+这个版本不会再把 Cockpit Tools 当成“必然不支持图片”的中转。后续如果还报错，重点看 Cockpit Tools 本地侧车是否真的注册了 `/v1/images/generations` 和 `/v1/images/edits`，以及当前 Codex 账号是否能使用 `gpt-image-2`。
