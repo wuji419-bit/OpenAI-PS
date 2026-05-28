@@ -8,7 +8,7 @@ const imaging = photoshop.imaging;
 const constants = photoshop.constants || {};
 const fs = storage.localFileSystem;
 const PLUGIN_ID = "com.local.openai.photoshop.generator";
-const PLUGIN_VERSION = "0.1.151";
+const PLUGIN_VERSION = "0.1.152";
 
 entrypoints.setup({
   panels: {
@@ -1438,6 +1438,7 @@ function buildImageEditPrompt(prompt, mode) {
 function buildConstrainedImageEditPrompt(prompt, mode) {
   const userPrompt = String(prompt || "").trim();
   if (!userPrompt) return "";
+  const ambiguityGuidance = getImageEditAmbiguityGuidance(userPrompt, mode);
 
   if (mode === "inpaint") {
     const surgicalHint = getSurgicalInpaintPromptHint(userPrompt);
@@ -1445,12 +1446,16 @@ function buildConstrainedImageEditPrompt(prompt, mode) {
       return [
         surgicalHint,
         "",
+        ...ambiguityGuidance,
+        ...(ambiguityGuidance.length ? [""] : []),
         "Use the provided transparent mask as the editable brush area. Generate a natural replacement inside that brush area only, aligned to the original face and art style.",
       ].join("\n");
     }
     return [
       userPrompt,
       "",
+      ...ambiguityGuidance,
+      ...(ambiguityGuidance.length ? [""] : []),
       "Use the provided transparent mask as the editable brush area. Make only the requested local change and keep the replacement aligned to the original image.",
     ].join("\n");
   }
@@ -1459,6 +1464,8 @@ function buildConstrainedImageEditPrompt(prompt, mode) {
     return [
       userPrompt,
       "",
+      ...ambiguityGuidance,
+      ...(ambiguityGuidance.length ? [""] : []),
       "Preserve the source image composition, style, line art, color palette, lighting, scale, and all unrelated details. Make only the requested change.",
     ].join("\n");
   }
@@ -1472,6 +1479,25 @@ function buildConstrainedImageEditPrompt(prompt, mode) {
   }
 
   return null;
+}
+
+function getImageEditAmbiguityGuidance(prompt, mode) {
+  const value = String(prompt || "").trim();
+  if (!value || (mode !== "inpaint" && mode !== "referenceNoMask" && mode !== "reference")) return [];
+
+  const lower = value.toLowerCase();
+  const mentionsRibbonBow = /蝴蝶结|蝴蝶結|丝带结|絲帶結|发结|髮結|bow\s*tie|ribbon\s*bow|hair\s*bow|decorative\s*bow/.test(lower);
+  const mentionsArcheryBowCn = /弓箭|武器弓|长弓|長弓|反曲弓|复合弓|複合弓|弓身|弓弦|箭弓|射箭/.test(value);
+  const mentionsBareBowCn = /弓/.test(value) && !mentionsRibbonBow;
+  const mentionsArcheryBowEn = /\b(archery|weapon|recurve|longbow|compound|arrow|bowstring)\b/.test(lower) ||
+    (/\bbow\b/.test(lower) && /\b(hand|hands|finger|fingers|arrow|string|weapon|archery|remove|erase|delete)\b/.test(lower) && !mentionsRibbonBow);
+
+  if (!mentionsArcheryBowCn && !mentionsBareBowCn && !mentionsArcheryBowEn) return [];
+
+  return [
+    "消歧：这里的“弓”指弓箭/武器弓，不是蝴蝶结、发结、领结、丝带结或装饰结。",
+    "保留原来的弓身、弓弦、材质和造型；只做用户要求的局部修改，不要新增蝴蝶结、丝带、领结或装饰结。",
+  ];
 }
 
 async function requestGenerations(settings, prompt) {

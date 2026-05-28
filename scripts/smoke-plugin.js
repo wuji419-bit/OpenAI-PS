@@ -16,7 +16,7 @@ function assert(condition, message) {
 function checkManifest() {
   const manifest = JSON.parse(fs.readFileSync(`${root}/manifest.json`, "utf8"));
   assert(manifest.id === "com.local.openai.photoshop.generator", "Unexpected plugin id");
-assert(manifest.version === "0.1.151", "Unexpected manifest version");
+assert(manifest.version === "0.1.152", "Unexpected manifest version");
   assert(manifest.main === "index.html", "Unexpected manifest entrypoint");
   assert(manifest.entrypoints?.[0]?.id === "openaiPanel", "Missing openaiPanel entrypoint");
   assert(manifest.entrypoints?.[0]?.icons?.[0]?.path === "assets/panel.png", "Panel icon path must be scale-base path");
@@ -521,6 +521,12 @@ async function runVmSmoke() {
       assert(embeddedDecoded.rgba[((1 * 6 + 2) * 4) + 3] === 0, "Embedded selection mask should make selected pixel editable");
       assert(embeddedDecoded.rgba[((1 * 6 + 3) * 4) + 3] === 255, "Embedded selection mask should keep unselected in-bounds pixel protected");
       assert(embeddedDecoded.rgba[((0 * 6 + 2) * 4) + 3] === 255, "Embedded selection mask should keep outside bbox protected");
+
+      const archeryBowPrompt = buildImageEditPrompt("把弓上面的手去掉，其他不要变", "inpaint");
+      assert(archeryBowPrompt.includes("弓箭/武器弓"), "Bare Chinese bow prompts should be disambiguated as archery weapons");
+      assert(archeryBowPrompt.includes("蝴蝶结"), "Archery bow guidance should exclude ribbon bows");
+      const ribbonBowPrompt = buildImageEditPrompt("把蝴蝶结上面的手去掉，其他不要变", "inpaint");
+      assert(!ribbonBowPrompt.includes("弓箭/武器弓"), "Ribbon bow prompts should not be forced into archery weapons");
 
       for (const mode of ["generate", "reference", "inpaint", "outpaint", "cutout", "split"]) {
         state.mode = mode;
