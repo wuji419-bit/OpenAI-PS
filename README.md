@@ -12,9 +12,7 @@ The plugin is designed for fast creative loops: generate a draft, use the curren
 - Reference-image editing by exporting the current Photoshop document and sending it to OpenAI edits.
 - Rectangular-selection repainting with a generated same-size mask.
 - Outpainting by adding top, bottom, left, and right margins before an edit request.
-- Cutout mode for exporting the active canvas or selected region to ComfyUI and placing the returned transparent PNG back at the original position.
-- RMBG subject cutout for opaque character, prop, monster, weapon, and white-background assets.
-- Optional GPT-assisted cutout strategy selection with local fallback heuristics.
+- Cutout mode for exporting the active canvas or selected region to Koukoutu's synchronous background-removal API and placing the returned transparent PNG back at the original position.
 - Result preview inside the panel.
 - Import generated results into the current Photoshop document as layers.
 - Fit imported output to the active rectangular selection when appropriate.
@@ -36,29 +34,30 @@ Model: gpt-image-2
 The plugin also supports local relay services that expose compatible image endpoints, for example:
 
 ```text
-Base URL: http://127.0.0.1:49456/v1
+Base URL: http://127.0.0.1:51866/v1
 Image generation: /images/generations
 Image edits: /images/edits
 ```
 
 `/chat/completions` is not a standard image endpoint. Use it only if your relay service intentionally maps chat requests to image base64 responses.
 
-## ComfyUI Cutout Flow
+## Koukoutu Cutout Flow
 
-Only Cutout mode sends images to the configured ComfyUI server. Text-to-image, reference edit, selection repaint, and outpaint use the configured OpenAI-compatible image endpoints. The default development ComfyUI URL is:
+Cutout mode sends images to Koukoutu's synchronous `background-removal` API with `crop=0`, so returned transparent PNG/WebP files preserve the original exported canvas or selection size. This lets Photoshop place the result back at the original coordinates without drift.
 
 ```text
-ComfyUI URL: http://192.168.1.128:8188
+Endpoint: https://sync.koukoutu.com/v1/create
+Auth header: X-API-Key
 ```
 
-Bundled workflow files live in [`comfyui-workflows/`](comfyui-workflows/) for remote setup and experiments:
+Text-to-image, reference edit, selection repaint, outpaint, and split mode use the configured OpenAI-compatible image endpoints. Bundled ComfyUI workflow files remain in [`comfyui-workflows/`](comfyui-workflows/) for remote setup experiments:
 
 - `codex_basic_inpaint_masklock_api.json`
 - `codex_sdxl_inpaint_masklock_api.json`
 - `codex_flux_fill_inpaint_masklock_api.json`
 - `codex_transparent_png_effect_composite_api.json`
 
-For selection repainting, the plugin uses the configured Image Edits endpoint such as `/images/edits`. For cutout, the plugin detects whether the input already has meaningful alpha; opaque subject images use RMBG on the ComfyUI machine, while effect images can use color-channel extraction.
+For selection repainting, the plugin uses the configured Image Edits endpoint such as `/images/edits`.
 
 ## Repository Layout
 

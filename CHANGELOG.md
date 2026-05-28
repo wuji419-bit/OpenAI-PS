@@ -2,27 +2,43 @@
 
 All notable changes to this project are documented here.
 
-## [0.1.75] - 2026-05-28
+## [0.1.105] - 2026-05-27
 
 ### Fixed
 
-- Removed the hard block for `127.0.0.1:49456/v1/images/*` so Cockpit Tools local API can handle image generation/edit requests when its image routes are available.
-- Updated network error text to surface Cockpit image-route/account/model checks without preventing requests from reaching the local relay.
+- Fixed Photoshop layer mask creation descriptors that could trigger the native "无法完成请求，因为程序错误" dialog while placing selection repaint results.
+- Restored selection repaint placement to align full transparent region patches at 1:1 size instead of scaling from visible pixel bounds.
+- Disabled the fragile current-selection mask path for automatic inpaint placement; the captured rectangular crop mask is rebuilt explicitly after placement.
 
-## [0.1.74] - 2026-05-24
+## [0.1.76] - 2026-05-22
 
 ### Fixed
 
-- Detect the current local `127.0.0.1:49456` relay state where `/responses` works but `/images/generations` and `/images/edits` return unsupported, and show a clear action message instead of a vague UXP `Network request failed`.
-- Stop falling back to raw model output when inpaint compositing fails, preventing whole-image edits from being shown or imported after a mask/composite failure.
+- Updated the default local Cockpit Tools Base URL from the stale `http://127.0.0.1:49456/v1` port to the currently running `http://127.0.0.1:51866/v1` service.
+- Migrated legacy local Base URL values on load so stored `9456` or `49456` settings normalize to `51866`.
+
+## [0.1.75] - 2026-05-22
+
+### Fixed
+
+- Corrected Photoshop UXP manifest icon paths so `scale: [1, 2]` resolves `assets/panel@1x.png`, `assets/panel@2x.png`, `assets/plugin@1x.png`, and `assets/plugin@2x.png` instead of looking for duplicated suffixes such as `panel@1x@1x.png`.
+
+## [0.1.74] - 2026-05-22
+
+### Fixed
+
+- Manual split targets now take effect even when the user enters a single target instead of two or more comma/newline-separated targets.
+- Outpaint results now preserve padding metadata, expand the Photoshop canvas to the generated size, and place the returned full-canvas image back at 1:1 scale.
+- Outpaint placement failures now keep their warning status instead of being overwritten by a generic success message.
+- Updated README cutout routing notes to describe the current Koukoutu workflow instead of the older ComfyUI cutout path.
 
 ## [0.1.73] - 2026-05-22
 
-### Changed
+### Fixed
 
-- Updated semantic split mode to generate each layer on a selectable solid matte background (`auto`, black, or white), then send that matte image through Koukoutu background removal before importing the transparent layer back into Photoshop.
-- Added a split matte selector to the Photoshop panel so users can force black or white backing when checking difficult edges instead of relying on a fixed background.
-- Made split and semantic analysis tolerate local `/responses` SSE payloads from the `127.0.0.1:49456/v1` relay.
+- Fixed selection repaint placement so transparent inpaint patches align to the original exported region at 1:1 size instead of being scaled from their visible pixel bounds.
+- Made GPT `/responses` parsing tolerate local relay SSE-style `data:` payloads for semantic selection, split, and cutout analysis helpers.
+- Corrected the cutout mode hint to describe the current Koukoutu workflow instead of the older ComfyUI wording.
 
 ## [0.1.72] - 2026-05-22
 

@@ -1,6 +1,6 @@
 # OpenAI Photoshop Generator
 
-这是一个从零写的轻量版 Photoshop UXP 插件，目标是在 Photoshop 里直接完成 OpenAI 图像生成、局部重绘、扩图，以及连接 AI 电脑上的 ComfyUI 做选区重绘和透明 PNG 抠图。
+这是一个从零写的轻量版 Photoshop UXP 插件，目标是在 Photoshop 里直接完成 OpenAI 图像生成、局部重绘、扩图、拆图，以及通过抠抠图 API 做透明 PNG 抠图。
 
 ## 当前功能
 
@@ -8,9 +8,8 @@
 - 参考图编辑：把当前 Photoshop 画布导出为参考图，再交给 OpenAI 编辑。
 - 矩形选区重绘：读取当前矩形选区，生成同尺寸 mask；默认按当前模型走 OpenAI `/images/edits` 或兼容本地代理。
 - 扩图：按上、下、左、右边距生成扩图输入和 mask。
-- 抠图：把当前画布或选区上传到 ComfyUI，返回透明 PNG，并自动放回原位置成为新图层。
-- 主体抠图：对白底、角色、怪物、武器、道具等不带透明通道的图，默认走 ComfyUI RMBG。
-- GPT 辅助抠图：留空或 `auto` 时可先让 GPT 看图判断策略，失败时回退到本地规则。
+- 抠图：把当前画布或选区上传到抠抠图同步接口，返回透明 PNG/WebP，并自动放回原位置成为新图层。
+- 拆图：用 `gpt-image-2` 识别并抽取独立语义图层，也支持在提示词里手动指定拆图目标。
 - 结果预览：生成结果会在面板内显示缩略图。
 - 导入图层：选中结果后可放进当前 Photoshop 文档。
 - 贴合选区：导入时可自动缩放到当前矩形选区。
@@ -55,7 +54,7 @@
    - 编辑接口：`/images/edits`
    - 模型：`gpt-image-2`
 4. 本地转发服务示例：
-   - 服务地址：`http://127.0.0.1:49456/v1`
+   - 服务地址：`http://127.0.0.1:51866/v1`
    - 文生图接口：`/images/generations`
    - 编辑接口：`/images/edits`
    - API Key：填本地服务要求的密钥
@@ -65,15 +64,17 @@
 7. 点击“生成”。
 8. 在结果里点“导入”或先“选中”再“导入”。
 
-## ComfyUI 抠图配置
+## 抠抠图 API 配置
 
-只有“抠图”模式会走 ComfyUI；文生图、参考图、选区重绘、扩图都走 OpenAI 兼容图片接口。默认开发环境里的 AI 电脑地址：
+只有“抠图”模式会走抠抠图同步接口；文生图、参考图、选区重绘、扩图、拆图都走 OpenAI 兼容图片接口。抠图接口固定为：
 
 ```text
-http://192.168.1.128:8188
+https://sync.koukoutu.com/v1/create
 ```
 
-仓库内置 workflow：
+需要在插件设置里填写抠抠图 `X-API-Key`。插件会固定使用 `crop=0`，让返回图保持原画布或原选区尺寸，避免放回 Photoshop 时发生偏移。
+
+仓库内仍保留 ComfyUI workflow 作为远程实验素材：
 
 - `comfyui-workflows/codex_basic_inpaint_masklock_api.json`
 - `comfyui-workflows/codex_sdxl_inpaint_masklock_api.json`
@@ -85,6 +86,5 @@ http://192.168.1.128:8188
 ## 下一步建议
 
 - 把矩形选区升级为真实套索/通道 mask。
-- 扩图导入时自动扩 Photoshop 画布。
 - 加一个“打开为新文档”按钮。
 - 加 prompt 预设和常用风格库。

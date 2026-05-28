@@ -1,7 +1,7 @@
 {
   "id": "com.local.openai.photoshop.generator",
   "name": "OpenAI Photoshop Generator",
-  "version": "0.1.75",
+  "version": "0.1.151",
   "manifestVersion": 5,
   "host": {
     "app": "PS",
@@ -12,6 +12,9 @@
     "allowCodeGenerationFromStrings": false,
     "network": {
       "domains": "all"
+    },
+    "ipc": {
+      "enablePluginCommunication": true
     },
     "localFileSystem": "request",
     "clipboard": "readAndWrite"
@@ -26,7 +29,7 @@
         "en-US": "OpenAI Image"
       },
       "minimumSize": {
-        "width": 320,
+        "width": 240,
         "height": 460
       },
       "maximumSize": {
@@ -34,7 +37,7 @@
         "height": 10000
       },
       "preferredDockedSize": {
-        "width": 400,
+        "width": 360,
         "height": 920
       },
       "preferredFloatingSize": {
@@ -45,19 +48,64 @@
         {
           "width": 23,
           "height": 23,
-          "path": "assets/panel@1x.png",
+          "path": "assets/panel.png",
           "scale": [1, 2],
           "theme": ["all"],
           "species": ["chrome"]
         }
       ]
+    },
+    {
+      "type": "command",
+      "id": "openaiOpenPanel",
+      "label": {
+        "default": "打开 OpenAI 面板",
+        "zh-CN": "打开 OpenAI 面板",
+        "en-US": "Open OpenAI Panel"
+      }
+    },
+    {
+      "type": "command",
+      "id": "openaiRunSmoke",
+      "label": {
+        "default": "运行 OpenAI 六模式烟测",
+        "zh-CN": "运行 OpenAI 六模式烟测",
+        "en-US": "Run OpenAI Six-Mode Smoke"
+      }
+    },
+    {
+      "type": "command",
+      "id": "openaiRunSplitSmoke",
+      "label": {
+        "default": "运行 OpenAI 拆图烟测",
+        "zh-CN": "运行 OpenAI 拆图烟测",
+        "en-US": "Run OpenAI Split Smoke"
+      }
+    },
+    {
+      "type": "command",
+      "id": "openaiRunMouthInpaintSmoke",
+      "label": {
+        "default": "运行 OpenAI 闭嘴选区烟测",
+        "zh-CN": "运行 OpenAI 闭嘴选区烟测",
+        "en-US": "Run OpenAI Mouth Inpaint Smoke"
+      }
+    },
+    {
+      "type": "command",
+      "id": "openaiImportApiKeyFromClipboard",
+      "label": {
+        "default": "从剪贴板导入 API Key",
+        "zh-CN": "从剪贴板导入 API Key",
+        "en-US": "Import API Key from Clipboard"
+      }
     }
   ],
   "icons": [
     {
       "width": 48,
       "height": 48,
-      "path": "assets/plugin@1x.png",
+      "path": "assets/plugin.png",
       "scale": [1, 2],
       "theme": ["all"],
       "species": ["pluginList"]

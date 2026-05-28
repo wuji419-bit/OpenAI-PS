@@ -2479,6 +2479,195 @@ button:disabled {
   visibility: visible !important;
 }
 
+/* v0.1.104: keep run controls stacked so narrow Photoshop panels do not
+   squeeze status text and the generate button into unreadable fragments. */
+.output-panel {
+  margin-bottom: 8px !important;
+}
+
+.output-head {
+  margin-bottom: 8px !important;
+}
+
+.output-tabs button {
+  height: 30px !important;
+  padding: 0 10px !important;
+  line-height: 30px !important;
+}
+
+.output-body {
+  max-height: 126px !important;
+  overflow-y: auto !important;
+  padding-right: 2px !important;
+}
+
+.thumb-grid {
+  max-height: 118px !important;
+  overflow-y: auto !important;
+}
+
+.thumb-tile,
+.thumb-placeholder {
+  height: 104px !important;
+  min-height: 104px !important;
+  margin-bottom: 6px !important;
+}
+
+.thumb-grid .thumb-placeholder:nth-child(n+3) {
+  display: none !important;
+}
+
+.selected-preview {
+  min-height: 126px !important;
+  max-height: 126px !important;
+}
+
+.selected-preview img {
+  height: 126px !important;
+}
+
+.run-panel {
+  display: block !important;
+  clear: both !important;
+  margin: 0 0 10px !important;
+  padding: 8px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: var(--radius-sm) !important;
+  background: var(--surface-panel) !important;
+}
+
+.run-row {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: 7px !important;
+  width: 100% !important;
+  overflow: visible !important;
+}
+
+.run-panel .primary-button,
+.run-panel .cancel-button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  flex: 0 0 auto !important;
+  float: none !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 36px !important;
+  height: 36px !important;
+  margin: 0 !important;
+  padding: 0 10px !important;
+  line-height: 36px !important;
+}
+
+.run-panel .cancel-button {
+  border: 1px solid rgba(251, 113, 133, 0.55) !important;
+  border-radius: var(--radius-sm) !important;
+  background: rgba(251, 113, 133, 0.12) !important;
+  color: #fecdd3 !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+}
+
+.run-panel .cancel-button:hover {
+  border-color: rgba(251, 113, 133, 0.85) !important;
+  background: rgba(251, 113, 133, 0.18) !important;
+  color: #fff1f2 !important;
+}
+
+.run-panel .cancel-button.hidden {
+  display: none !important;
+}
+
+.run-panel .secondary-actions {
+  display: flex !important;
+  gap: 8px !important;
+  margin-top: 7px !important;
+  overflow: visible !important;
+}
+
+.run-panel .secondary-actions .secondary-button,
+.run-panel .secondary-actions .ghost-button {
+  display: inline-flex !important;
+  flex: 1 1 0 !important;
+  float: none !important;
+  width: auto !important;
+  min-height: 28px !important;
+  height: 28px !important;
+  margin: 0 !important;
+}
+
+.status-row,
+.settings-status-row {
+  margin-top: 0 !important;
+  min-height: 0 !important;
+  line-height: 16px !important;
+}
+
+.run-panel .status-row {
+  display: flex !important;
+  align-items: flex-start !important;
+  flex: 0 0 auto !important;
+  float: none !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  height: auto !important;
+  min-height: 42px !important;
+  max-height: 78px !important;
+  margin: 0 !important;
+  padding: 7px 8px !important;
+  border: 1px solid var(--line-soft) !important;
+  border-radius: var(--radius-sm) !important;
+  background: var(--surface-low) !important;
+  overflow: hidden !important;
+  text-align: left !important;
+}
+
+.run-panel .status-dot {
+  flex: 0 0 auto !important;
+  margin-top: 5px !important;
+}
+
+.run-panel .progress-track {
+  display: block !important;
+  clear: both !important;
+  height: 3px !important;
+  margin: 7px 0 0 !important;
+}
+
+.status-text {
+  display: inline-block !important;
+  max-width: calc(100% - 16px) !important;
+  height: 16px !important;
+  max-height: 16px !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+  word-break: normal !important;
+  line-height: 16px !important;
+  text-align: left !important;
+  text-overflow: ellipsis !important;
+}
+
+.run-panel .status-text {
+  display: block !important;
+  flex: 1 1 auto !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  width: auto !important;
+  height: auto !important;
+  min-height: 16px !important;
+  max-height: 64px !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+  line-height: 16px !important;
+  text-overflow: clip !important;
+}
+
 /* UXP parameter layout: avoid label/form-field ghost boxes that Photoshop
    renders as wide empty blocks. */
 .parameter-section .parameter-grid {
