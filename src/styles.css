@@ -2689,11 +2689,11 @@ button:disabled {
 
 .parameter-section .form-field {
   display: block !important;
-  width: 220px !important;
-  max-width: 220px !important;
+  width: 168px !important;
+  max-width: 168px !important;
   min-height: 0 !important;
   height: auto !important;
-  margin: 0 0 14px !important;
+  margin: 0 0 7px !important;
   padding: 0 !important;
   border: 0 !important;
   background: transparent !important;
@@ -2702,27 +2702,27 @@ button:disabled {
 
 .parameter-section .form-label {
   display: block !important;
-  width: 220px !important;
+  width: 168px !important;
   height: auto !important;
-  margin: 0 0 6px !important;
+  margin: 0 0 3px !important;
   padding: 0 !important;
-  line-height: 15px !important;
+  line-height: 14px !important;
 }
 
 .parameter-section .select-wrap,
 .parameter-section #sizeInput,
 .parameter-section #countInput {
   display: block !important;
-  width: 220px !important;
-  max-width: 220px !important;
+  width: 168px !important;
+  max-width: 168px !important;
   min-width: 0 !important;
 }
 
 .parameter-section #sizeInput,
 .parameter-section #countInput {
-  height: 30px !important;
-  min-height: 30px !important;
-  line-height: 30px !important;
+  height: 27px !important;
+  min-height: 27px !important;
+  line-height: 27px !important;
 }
 
 .parameter-section .checkbox-line {
@@ -2730,16 +2730,28 @@ button:disabled {
   align-items: center !important;
   width: auto !important;
   max-width: 260px !important;
-  margin: 0 !important;
+  margin: 1px 0 0 !important;
   padding: 0 !important;
+  min-height: 16px !important;
+  font-size: 11.5px !important;
+  line-height: 16px !important;
 }
 
 .parameter-section .checkbox-line input {
-  flex: 0 0 16px !important;
-  width: 16px !important;
-  min-width: 16px !important;
-  height: 16px !important;
-  margin: 0 6px 0 0 !important;
+  flex: 0 0 14px !important;
+  width: 14px !important;
+  min-width: 14px !important;
+  height: 14px !important;
+  margin: 0 5px 0 0 !important;
+}
+
+.workspace-scroll > .parameter-section.section-block {
+  margin-bottom: 8px !important;
+  padding-top: 8px !important;
+}
+
+.workspace-scroll > .parameter-section.section-block + .section-block {
+  padding-top: 8px !important;
 }
 
 /* UXP outpaint layout: absolute compass positioning is unreliable in the

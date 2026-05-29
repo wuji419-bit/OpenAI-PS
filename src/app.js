@@ -8,7 +8,7 @@ const imaging = photoshop.imaging;
 const constants = photoshop.constants || {};
 const fs = storage.localFileSystem;
 const PLUGIN_ID = "com.local.openai.photoshop.generator";
-const PLUGIN_VERSION = "0.1.152";
+const PLUGIN_VERSION = "0.1.286";
 
 entrypoints.setup({
   panels: {
@@ -30,8 +30,8 @@ entrypoints.setup({
     },
     openaiRunSmoke: {
       async run() {
-        console.log("[OpenAI Photoshop Generator] openaiRunSmoke command");
-        await runSixModeSmoke();
+        console.log("[OpenAI Photoshop Generator] openaiRunSmoke command (offline diagnostics)");
+        await runOfflineSixModeDiagnostics();
       },
     },
     openaiRunSplitSmoke: {
@@ -91,11 +91,14 @@ const PROMPT_DRAFT_KEY = "openaiPhotoshop.promptDrafts.v1";
 const DEFAULT_BASE_URL = "http://127.0.0.1:49456/v1";
 const DEFAULT_COMFY_URL = "http://192.168.1.128:8188";
 const KOUKOUTU_SYNC_URL = "https://sync.koukoutu.com/v1/create";
-const DEFAULT_CUTOUT_ANALYSIS_MODEL = "gpt-5.4-mini";
-const DEFAULT_SEMANTIC_EDIT_MODEL = "gpt-5.4-mini";
+const DEFAULT_CUTOUT_ANALYSIS_MODEL = "gpt-5.5";
+const DEFAULT_SEMANTIC_EDIT_MODEL = "gpt-5.5";
+const RESPONSES_MAIN_MODEL_FALLBACKS = ["gpt-5.5", "gpt-5", "gpt-4.1", "gpt-4o"];
 const COMFY_INPAINT_MAX_PIXELS = 1600 * 1600;
 const COMFY_INPAINT_MAX_EDGE = 1600;
 const OPENAI_INPAINT_FULL_CANVAS_MAX_PIXELS = 3840 * 2160;
+const PROTECTED_REPAINT_MIN_SOURCE_NON_WHITE_RATIO = 0.03;
+const PROTECTED_REPAINT_MIN_RESULT_NON_WHITE_RATIO = 0.002;
 const TEMP_SELECTION_CHANNEL_PREFIX = "__openai_inpaint_selection_";
 const MAX_BATCH_COUNT = 10;
 const MAX_SPLIT_LAYERS = 40;
@@ -283,6 +286,7 @@ document.addEventListener("DOMContentLoaded", init);
 
 function init() {
   console.log(`[OpenAI Photoshop Generator] init ${PLUGIN_VERSION}`);
+  syncVersionLabels();
   loadSettings();
   loadPromptDrafts();
   renderPromptPresets();
@@ -295,6 +299,14 @@ function init() {
   renderHistory();
   renderOutputView();
   setStatus("就绪");
+}
+
+function syncVersionLabels() {
+  const label = `v${PLUGIN_VERSION}`;
+  const labels = document.querySelectorAll(".version-inline");
+  for (const element of labels) {
+    element.textContent = label;
+  }
 }
 
 function bindEvents() {
@@ -645,7 +657,7 @@ function updateModeUI() {
     inpaint: {
       icon: "□",
       title: "选区重绘",
-      text: "基于当前 Photoshop 选区生成像素蒙版，只重绘真正选中的区域。",
+      text: "把当前 Photoshop 选区导出为白底截图，按普通上传图片编辑；不发送 API Mask，返回后再按原选区放回新图层。",
       prompt: "重绘提示词 (Prompt)",
       negative: "反向提示词 (Negative Prompt)",
       placeholder: "描述选区内需要替换成什么内容...",
@@ -800,8 +812,8 @@ async function testConnection() {
 
     if (response.ok) {
       setStatus(shouldUseSidecarImageEndpointsFirst(settings, true)
-        ? "连接正常；Codex sidecar 将优先使用 /images/generations 和 /images/edits"
-        : "连接正常；文生图可用不代表选区重绘可用，重绘还需要服务支持 /images/edits");
+        ? "连接正常；选区重绘将用 /responses 普通上传截图，其他兼容编辑保留 /images/edits"
+        : "连接正常；选区重绘需要 /responses 图像工具，/images/edits 只用于兼容编辑/扩图");
     } else if (response.status === 401 || response.status === 403) {
       setStatus("服务可达，但 API Key 无效");
     } else if (response.status === 404) {
@@ -927,12 +939,40 @@ async function runGeneration() {
           buildImageEditPrompt(prompt, "referenceNoMask"),
           reference.image,
           null,
-          { size: reference.apiSize }
+          { size: reference.apiSize, screenshotReferenceEdit: true, referenceSize: reference.displaySize }
         );
+        items = await normalizeReferenceRegionResultItems(items, reference);
+        items = (items || []).map((item) => ({
+          ...item,
+          placementMode: "full-region-patch",
+          targetRect: reference.targetRect,
+          placementRect: reference.placementRect,
+        }));
       } else {
-        const image = await exportActiveDocumentAsBase64();
+        const docSize = getDocumentSize();
+        const fullRect = getFullDocumentRect(docSize);
+        setStatus("正在导出整张画布作为无 Mask 普通参考图...");
+        const image = await matteTransparentPngBase64(
+          await exportActiveDocumentAsBase64(),
+          { r: 255, g: 255, b: 255 }
+        );
+        await saveDebugBase64Image("openai-last-reference-full.png", image);
+        outputSize = `${fullRect.width}x${fullRect.height}`;
+        targetRect = fullRect;
+        placementRect = fullRect;
         setProgress(36, true);
-        items = await requestEdits(settings, buildImageEditPrompt(prompt, "reference"), image, null);
+        items = await requestEdits(settings, buildImageEditPrompt(prompt, "reference"), image, null, {
+          size: settings.size,
+          screenshotReferenceEdit: true,
+          referenceSize: `${fullRect.width}x${fullRect.height}`,
+        });
+        items = await normalizeReferenceRegionResultItems(items, { placementRect: fullRect });
+        items = (items || []).map((item) => ({
+          ...item,
+          placementMode: "full-region-patch",
+          targetRect: fullRect,
+          placementRect: fullRect,
+        }));
       }
     } else if (state.mode === "inpaint") {
       setProgress(15, true);
@@ -946,26 +986,35 @@ async function runGeneration() {
       const inpaintSettings = getInpaintSettings(settings);
       const editSelection = selection;
       setProgress(40, true);
-      setStatus("正在按你画的完整选区导出重绘 Mask...");
-      // Photoshop 2026 can surface a program-error dialog when restoring a
-      // temporary alpha channel into a layer mask. Keep the edit bounded with
-      // a local layer clip instead of saving/restoring selection channels.
-      const selectionChannelName = null;
-      const inpaint = await createInpaintInputs(editSelection, docSize, settings.model);
-      inpaint.selectionChannelName = selectionChannelName;
-      inpaint.forceClosedMouthFallback = false;
+      setStatus("正在把选区导出为白底截图参考图...");
+      const inpaint = await createInpaintScreenshotInputs(editSelection, docSize, settings.model);
       outputSize = inpaint.displaySize;
       targetRect = inpaint.targetRect;
       placementRect = inpaint.placementRect;
       setProgress(58, true);
-      setStatus(`正在重绘选区，接口尺寸 ${inpaint.apiSize}，只导回 ${inpaint.displaySize}`);
-      items = await requestEdits(inpaintSettings, buildImageEditPrompt(prompt, "inpaint"), inpaint.image, inpaint.mask, {
+      setStatus(`正在按截图参考重绘：${inpaint.displaySize}`);
+      items = await requestEdits(inpaintSettings, prompt, inpaint.image, null, {
         size: inpaint.apiSize,
+        screenshotReferenceEdit: true,
+        referenceCrop: inpaint.referenceCrop,
+        referenceSize: inpaint.displaySize,
+        referenceCanvasSize: inpaint.referenceCanvasSize,
+        referenceCropBox: formatScreenshotReferenceCropBox(inpaint.referenceCrop),
       });
-      setProgress(88, true);
+      items = await cropScreenshotReferenceEditItems(items, inpaint.referenceCrop, {
+        requireProtectedContent: isPreservationConstraintText(prompt),
+      });
       setProgress(84, true);
-      setStatus("模型已返回，正在准备选区保护图层...");
-      items = await prepareMaskedInpaintLayers(items, inpaint);
+      setStatus("模型已返回，正在准备截图结果图层...");
+      items = (items || []).map((item) => ({
+        ...item,
+        importB64: item.importB64 || item.b64,
+        placementMode: "direct-selection-patch",
+        targetRect: inpaint.targetRect,
+        placementRect: inpaint.placementRect,
+        cropRect: null,
+        skipPreviewCrop: true,
+      }));
     } else if (state.mode === "outpaint") {
       setProgress(18, true);
       const image = await exportActiveDocumentAsBase64();
@@ -977,6 +1026,7 @@ async function runGeneration() {
       placementRect = outpaint.placementRect;
       setProgress(58, true);
       items = await requestEdits(settings, buildImageEditPrompt(prompt, "outpaint"), outpaint.image, outpaint.mask);
+      items = await normalizeOutpaintResultItems(items, outpaint);
       items = items.map((item) => ({
         ...item,
         outpaintPadding: outpaint.padding,
@@ -992,7 +1042,7 @@ async function runGeneration() {
       placementRect = cutout.placementRect;
       setProgress(52, true);
       setStatus("正在调用抠抠图同步抠图 API...");
-      items = [await requestKoukoutuCutout(settings, cutout.image)];
+      items = [await normalizeCutoutResultItem(await requestKoukoutuCutout(settings, cutout.image), cutout)];
     } else if (state.mode === "split") {
       setProgress(18, true);
       const docSize = getDocumentSize();
@@ -1037,13 +1087,17 @@ async function runGeneration() {
       targetRect: item.targetRect || targetRect,
       placementRect: item.placementRect || placementRect,
       cropRect: state.mode === "split" ? null : (item.placementMode === "direct-selection-patch" ? null : (item.cropRect || targetRect)),
+      importVisibleRect: item.importVisibleRect || null,
       outpaintPadding: item.outpaintPadding || null,
       outpaintBaseSize: item.outpaintBaseSize || null,
+      normalizedPlacementSize: Boolean(item.normalizedPlacementSize),
       splitIndex: item.splitIndex || null,
       splitLabel: item.splitLabel || null,
       splitBounds: item.splitBounds || null,
       whiteMatteMask: Boolean(item.whiteMatteMask),
       preclippedImport: Boolean(item.preclippedImport),
+      previewB64: item.previewB64 || null,
+      previewBounds: item.previewBounds || null,
       createdAt: new Date().toISOString(),
     }));
 
@@ -1059,7 +1113,11 @@ async function runGeneration() {
     setProgress(88, true);
     throwIfCancelled();
     renderResults();
-    await Promise.all(stamped.map(saveHistoryItem));
+    const historyUpdates = await Promise.all(stamped.map(saveHistoryItem));
+    if (historyUpdates.some(Boolean)) {
+      await prepareCroppedPreviews(stamped);
+      renderResults();
+    }
     throwIfCancelled();
     if (state.mode === "cutout" && stamped[0]) {
       setProgress(92, true);
@@ -1067,13 +1125,14 @@ async function runGeneration() {
       await placeResultAsLayer(stamped[0], stamped[0].placementRect || stamped[0].targetRect, "Koukoutu Cutout", null, { preserveImageAspect: true });
     } else if (state.mode === "inpaint" && stamped[0]) {
       setProgress(92, true);
-      setStatus("正在把重绘结果按 Photoshop 选区保护图层放回...");
+      setStatus("正在把截图重绘结果按原选区位置放回...");
       try {
         const shouldMaskInpaint = isMaskedInpaintLayerResult(stamped[0]);
+        const directSelectionPatch = isDirectSelectionPatchResult(stamped[0]);
         const needsPostImportMask = shouldMaskInpaint && !stamped[0].preclippedImport;
         const placementRect = stamped[0].placementRect || stamped[0].targetRect;
         await placeResultAsLayer(stamped[0], placementRect, "OpenAI Inpaint", needsPostImportMask ? (stamped[0].cropRect || stamped[0].targetRect) : null, {
-          fitByImageSize: shouldMaskInpaint,
+          fitByImageSize: shouldMaskInpaint || directSelectionPatch,
           alignVisibleRect: shouldMaskInpaint,
           preserveImageAspect: false,
           rasterizeBeforeMask: needsPostImportMask,
@@ -1114,7 +1173,9 @@ async function runGeneration() {
     setStatus(placementWarning || (state.mode === "cutout"
       ? "完成：已创建抠图图层并放回原位置"
       : state.mode === "inpaint"
-      ? "完成：已作为选区保护新图层放回，原图未变"
+      ? (isDirectSelectionPatchResult(stamped[0])
+        ? "完成：已按原选区尺寸直接放回截图重绘结果，原图未变"
+        : "完成：已作为选区保护新图层放回，原图未变")
       : state.mode === "outpaint"
       ? "完成：已扩展画布并放回扩图结果"
       : state.mode === "split"
@@ -1201,6 +1262,463 @@ async function runSixModeSmoke() {
     updateModeUI();
     console.log("[OpenAI Photoshop Generator] smoke finished");
   }
+}
+
+async function runOfflineSixModeDiagnostics() {
+  if (state.busy) {
+    console.warn("[OpenAI Photoshop Generator] offline diagnostics skipped: plugin is busy");
+    return;
+  }
+
+  const restore = captureOfflineDiagnosticState();
+  let diagnosticDoc = null;
+  const failures = [];
+  const completedModes = new Set();
+  const modes = [
+    ["generate", "offline diagnostic game icon"],
+    ["reference", "保持参考图主体不变，只做轻微清晰化"],
+    ["inpaint", "把选区里的圆形手部去掉，弓不要变"],
+    ["cutout", "离线抠图诊断"],
+    ["split", "弓，箭头"],
+    ["outpaint", "自然扩展白底画布边缘"],
+  ];
+
+  try {
+    setStatus("正在创建离线诊断临时文档...");
+    diagnosticDoc = await createOfflineDiagnosticDocument();
+    state.promptDraftSaveSuspended = true;
+    state.requestTimeoutMs = 5000;
+    applyOfflineDiagnosticSettings();
+    const diagnostics = await withOfflineDiagnosticStubs(async (diagnostics) => {
+      for (const [mode, prompt] of modes) {
+        try {
+          console.log(`[OpenAI Photoshop Generator] offline diagnostics mode start: ${mode}`);
+          state.mode = mode;
+          updateModeUI();
+          $("promptInput").value = prompt;
+          $("negativePromptInput").value = mode === "inpaint" ? "不要改变弓、箭头、线条、颜色" : "";
+          if (mode === "reference" || mode === "inpaint") {
+            await selectSmokeRect();
+          }
+          await runGeneration();
+          if ((mode === "generate" || mode === "reference") && state.selectedId) {
+            await importSelected();
+          }
+          const status = $("statusBar").textContent || "";
+          if (/^失败|请先/.test(status)) {
+            failures.push(`${mode}: ${status}`);
+            console.warn(`[OpenAI Photoshop Generator] offline diagnostics failed status: ${mode}; status=${status}`);
+          } else {
+            completedModes.add(mode);
+            console.log(`[OpenAI Photoshop Generator] offline diagnostics mode done: ${mode}; status=${status}`);
+          }
+        } catch (error) {
+          failures.push(`${mode}: ${error.message || error}`);
+          console.error(`[OpenAI Photoshop Generator] offline diagnostics mode failed: ${mode}`, error);
+        }
+      }
+      return diagnostics;
+    });
+
+    const selectedReferenceCall = diagnostics.editCalls.find((call) => call.mode === "reference");
+    if (!selectedReferenceCall || selectedReferenceCall.hasMask || !selectedReferenceCall.screenshotReferenceEdit) {
+      failures.push("reference: 选区参考图没有使用 no-mask 普通上传编辑路径");
+    }
+    const screenshotInpaintCall = diagnostics.editCalls.find((call) => call.mode === "inpaint");
+    if (!screenshotInpaintCall || screenshotInpaintCall.hasMask || !screenshotInpaintCall.screenshotReferenceEdit) {
+      failures.push("inpaint: 选区重绘没有使用 no-mask 普通上传截图路径");
+    }
+    const maskedOutpaintCall = diagnostics.editCalls.find((call) => call.mode === "outpaint");
+    if (!maskedOutpaintCall || !maskedOutpaintCall.hasMask || maskedOutpaintCall.screenshotReferenceEdit) {
+      failures.push("outpaint: 扩图没有使用带 mask 的扩展画布编辑路径");
+    }
+    const directSelectionPatchCall = diagnostics.placeCalls.find((call) => call.mode === "inpaint" && call.placementMode === "direct-selection-patch");
+    if (
+      !directSelectionPatchCall ||
+      !directSelectionPatchCall.fitByImageSize ||
+      directSelectionPatchCall.hasCropRect ||
+      directSelectionPatchCall.useCurrentSelectionMask ||
+      directSelectionPatchCall.useSavedSelectionMask ||
+      directSelectionPatchCall.requireMask
+    ) {
+      failures.push("inpaint: 选区重绘没有按原选区直接放回，或仍在使用导入后蒙版");
+    }
+    if (!directSelectionPatchCall?.boundsMatchSelection) {
+      failures.push("inpaint: 选区重绘真实导入图层边界没有贴回原选区，仍可能出现位置漂移");
+    }
+    const outpaintCanvasExpandCall = diagnostics.expandCanvasCalls.find((call) => call.mode === "outpaint");
+    if (!outpaintCanvasExpandCall || outpaintCanvasExpandCall.targetWidth <= outpaintCanvasExpandCall.baseWidth || outpaintCanvasExpandCall.targetHeight <= outpaintCanvasExpandCall.baseHeight) {
+      failures.push("outpaint: 扩图没有记录到画布扩展动作");
+    }
+    const cutoutOriginalSizeCall = diagnostics.cutoutCalls.find((call) => call.mode === "cutout");
+    if (
+      !cutoutOriginalSizeCall ||
+      cutoutOriginalSizeCall.outputWidth !== cutoutOriginalSizeCall.inputWidth ||
+      cutoutOriginalSizeCall.outputHeight !== cutoutOriginalSizeCall.inputHeight
+    ) {
+      failures.push("cutout: 抠图结果没有保持原导出区域尺寸，可能导致回贴漂移");
+    }
+    const splitFullCanvasCall = diagnostics.splitCalls.find((call) => call.mode === "split");
+    if (
+      !splitFullCanvasCall ||
+      splitFullCanvasCall.outputCount < 1 ||
+      splitFullCanvasCall.outputs.some((item) => item.width !== splitFullCanvasCall.docWidth || item.height !== splitFullCanvasCall.docHeight)
+    ) {
+      failures.push("split: 语义拆图层没有保持整画布尺寸和原坐标");
+    }
+
+    const coverageModes = modes
+      .map(([mode]) => `${mode}=${completedModes.has(mode) ? "ok" : "missing"}`)
+      .join(" ");
+    const coverageInvariants = [
+      `noMaskReference=${selectedReferenceCall && !selectedReferenceCall.hasMask && selectedReferenceCall.screenshotReferenceEdit ? "ok" : "fail"}`,
+      `noMaskInpaint=${screenshotInpaintCall && !screenshotInpaintCall.hasMask && screenshotInpaintCall.screenshotReferenceEdit ? "ok" : "fail"}`,
+      `directSelectionPatch=${directSelectionPatchCall && directSelectionPatchCall.fitByImageSize && !directSelectionPatchCall.hasCropRect && !directSelectionPatchCall.requireMask ? "ok" : "fail"}`,
+      `directSelectionBounds=${directSelectionPatchCall?.boundsMatchSelection ? "ok" : "fail"}`,
+      `maskedOutpaint=${maskedOutpaintCall && maskedOutpaintCall.hasMask && !maskedOutpaintCall.screenshotReferenceEdit ? "ok" : "fail"}`,
+      `outpaintCanvasExpand=${outpaintCanvasExpandCall && outpaintCanvasExpandCall.targetWidth > outpaintCanvasExpandCall.baseWidth && outpaintCanvasExpandCall.targetHeight > outpaintCanvasExpandCall.baseHeight ? "ok" : "fail"}`,
+      `cutoutOriginalSize=${cutoutOriginalSizeCall && cutoutOriginalSizeCall.outputWidth === cutoutOriginalSizeCall.inputWidth && cutoutOriginalSizeCall.outputHeight === cutoutOriginalSizeCall.inputHeight ? "ok" : "fail"}`,
+      `splitFullCanvas=${splitFullCanvasCall && splitFullCanvasCall.outputCount > 0 && splitFullCanvasCall.outputs.every((item) => item.width === splitFullCanvasCall.docWidth && item.height === splitFullCanvasCall.docHeight) ? "ok" : "fail"}`,
+    ].join(" ");
+    console.log(`[OpenAI Photoshop Generator] offline diagnostics coverage: ${coverageModes} ${coverageInvariants}`);
+
+    if (failures.length) {
+      setStatus(`离线诊断完成但有 ${failures.length} 项失败：${failures.join("；")}`);
+    } else {
+      setStatus("离线诊断通过：六个主要功能路径均已跑通，未调用外部图片接口");
+    }
+  } catch (error) {
+    console.error("[OpenAI Photoshop Generator] offline diagnostics failed", error);
+    setStatus(`离线诊断失败：${error.message || error}`);
+  } finally {
+    restoreOfflineDiagnosticState(restore);
+    await closeDiagnosticDocument(diagnosticDoc);
+  }
+}
+
+function captureOfflineDiagnosticState() {
+  const fieldIds = [
+    "apiKeyInput",
+    "koukoutuApiKeyInput",
+    "countInput",
+    "padTopInput",
+    "padRightInput",
+    "padBottomInput",
+    "padLeftInput",
+    "promptInput",
+    "negativePromptInput",
+  ];
+  return {
+    mode: state.mode,
+    requestTimeoutMs: state.requestTimeoutMs,
+    promptDraftSaveSuspended: state.promptDraftSaveSuspended,
+    fields: Object.fromEntries(fieldIds.map((id) => [id, $(id)?.value || ""])),
+  };
+}
+
+function restoreOfflineDiagnosticState(restore) {
+  state.requestTimeoutMs = restore.requestTimeoutMs;
+  state.promptDraftSaveSuspended = restore.promptDraftSaveSuspended;
+  state.mode = restore.mode;
+  for (const [id, value] of Object.entries(restore.fields || {})) {
+    if ($(id)) $(id).value = value;
+  }
+  updateModeUI();
+}
+
+function applyOfflineDiagnosticSettings() {
+  $("apiKeyInput").value = "sk-offline-diagnostic";
+  $("koukoutuApiKeyInput").value = "offline-diagnostic";
+  $("countInput").value = "1";
+  $("padTopInput").value = "32";
+  $("padRightInput").value = "32";
+  $("padBottomInput").value = "32";
+  $("padLeftInput").value = "32";
+}
+
+async function withOfflineDiagnosticStubs(callback) {
+  const diagnostics = {
+    editCalls: [],
+    cutoutCalls: [],
+    splitCalls: [],
+    expandCanvasCalls: [],
+    placeCalls: [],
+  };
+  const originals = {
+    requestGenerations,
+    requestEdits,
+    requestKoukoutuCutout,
+    requestSemanticSplitLayers,
+    expandCanvasForOutpaint,
+    placeResultAsLayer,
+    saveSettings,
+    saveHistoryItem,
+  };
+
+  requestGenerations = async (settings) => {
+    const size = parseImageSize(settings.size) || { width: 512, height: 512 };
+    return [{ b64: createOfflineDiagnosticPngBase64(size.width, size.height, "generate"), format: "png" }];
+  };
+  requestEdits = async (settings, prompt, imageB64, maskB64, options = {}) => {
+    diagnostics.editCalls.push({
+      mode: state.mode,
+      hasMask: Boolean(maskB64),
+      screenshotReferenceEdit: Boolean(options.screenshotReferenceEdit),
+      prompt: String(prompt || ""),
+    });
+    const imageSize = getPngDimensionsFromBase64(imageB64) || parseImageSize(options.size) || { width: 512, height: 512 };
+    if (state.mode === "inpaint" && options.screenshotReferenceEdit && options.referenceCrop) {
+      const crop = options.referenceCrop;
+      const canvasWidth = Math.max(1, Math.round(crop.canvasWidth || imageSize.width));
+      const canvasHeight = Math.max(1, Math.round(crop.canvasHeight || imageSize.height));
+      const cropWidth = Math.max(1, Math.round(crop.width || imageSize.width));
+      const cropHeight = Math.max(1, Math.round(crop.height || imageSize.height));
+      const cropLeft = Math.max(0, Math.min(canvasWidth - 1, Math.round(crop.left || 0)));
+      const cropTop = Math.max(0, Math.min(canvasHeight - 1, Math.round(crop.top || 0)));
+      const output = new Uint8Array(canvasWidth * canvasHeight * 4);
+      output.fill(255);
+      const patch = await decodePngRgbaBase64(createOfflineDiagnosticPngBase64(cropWidth, cropHeight, "inpaint-screenshot-smoke"));
+      blitRgba(patch.rgba, patch.width, patch.height, output, canvasWidth, canvasHeight, cropLeft, cropTop);
+      return [{
+        b64: bytesToBase64(encodePngRgba(canvasWidth, canvasHeight, output)),
+        format: "png",
+      }];
+    }
+    return [{
+      b64: createOfflineDiagnosticPngBase64(imageSize.width, imageSize.height, maskB64 ? "masked-edit" : "reference-edit"),
+      format: "png",
+    }];
+  };
+  requestKoukoutuCutout = async (settings, imageB64) => {
+    const imageSize = getPngDimensionsFromBase64(imageB64) || { width: 512, height: 512 };
+    diagnostics.cutoutCalls.push({
+      mode: state.mode,
+      inputWidth: imageSize.width,
+      inputHeight: imageSize.height,
+      outputWidth: imageSize.width,
+      outputHeight: imageSize.height,
+    });
+    return {
+      b64: createOfflineDiagnosticPngBase64(imageSize.width, imageSize.height, "cutout", { transparent: true }),
+      format: "png",
+    };
+  };
+  requestSemanticSplitLayers = async (settings, imageB64, docSize, targets) => {
+    const width = Math.max(1, Math.round(docSize?.width || getPngDimensionsFromBase64(imageB64)?.width || 512));
+    const height = Math.max(1, Math.round(docSize?.height || getPngDimensionsFromBase64(imageB64)?.height || 512));
+    const items = (targets || [{ label: "离线元素", target: "offline element" }]).slice(0, 2).map((target, index) => ({
+      b64: createOfflineDiagnosticPngBase64(width, height, `split-${index}`, { whiteMatte: true, offset: index }),
+      format: "png",
+      splitIndex: index + 1,
+      splitLabel: target.label || `离线元素${index + 1}`,
+      targetRect: { left: 0, top: 0, right: width, bottom: height, width, height },
+      placementRect: { left: 0, top: 0, right: width, bottom: height, width, height },
+      whiteMatteMask: true,
+    }));
+    diagnostics.splitCalls.push({
+      mode: state.mode,
+      docWidth: width,
+      docHeight: height,
+      outputCount: items.length,
+      outputs: items.map((item) => {
+        const dimensions = getPngDimensionsFromBase64(item.b64) || { width: 0, height: 0 };
+        return { width: dimensions.width, height: dimensions.height };
+      }),
+    });
+    return items;
+  };
+  saveSettings = () => {};
+  saveHistoryItem = async () => {};
+  expandCanvasForOutpaint = async (padding, targetRect, baseSize = null) => {
+    diagnostics.expandCanvasCalls.push({
+      mode: state.mode,
+      padding: padding || null,
+      targetWidth: Math.round(toNumber(targetRect?.width) || 0),
+      targetHeight: Math.round(toNumber(targetRect?.height) || 0),
+      baseWidth: Math.round(toNumber(baseSize?.width) || 0),
+      baseHeight: Math.round(toNumber(baseSize?.height) || 0),
+    });
+    return originals.expandCanvasForOutpaint(padding, targetRect, baseSize);
+  };
+  placeResultAsLayer = async (item, selectionInfo, layerName, cropRect = null, opts = {}) => {
+    const call = {
+      mode: item?.mode || state.mode,
+      placementMode: item?.placementMode || null,
+      layerName: String(layerName || ""),
+      selectionWidth: Math.round(toNumber(selectionInfo?.width) || 0),
+      selectionHeight: Math.round(toNumber(selectionInfo?.height) || 0),
+      hasCropRect: Boolean(cropRect),
+      fitByImageSize: Boolean(opts.fitByImageSize),
+      alignVisibleRect: Boolean(opts.alignVisibleRect),
+      preserveImageAspect: Boolean(opts.preserveImageAspect),
+      rasterizeBeforeMask: Boolean(opts.rasterizeBeforeMask),
+      useCurrentSelectionMask: Boolean(opts.useCurrentSelectionMask),
+      useSavedSelectionMask: Boolean(opts.useSavedSelectionMask),
+      requireMask: Boolean(opts.requireMask),
+      boundsMatchSelection: false,
+      layerBounds: null,
+    };
+    diagnostics.placeCalls.push(call);
+    const result = await originals.placeResultAsLayer(item, selectionInfo, layerName, cropRect, opts);
+    if (call.mode === "inpaint" && call.placementMode === "direct-selection-patch") {
+      const placedLayer = app.activeDocument?.activeLayers?.[0] || null;
+      const bounds = normalizeBounds(placedLayer?.boundsNoEffects || placedLayer?.bounds);
+      call.layerBounds = bounds ? {
+        left: Math.round(toNumber(bounds.left) || 0),
+        top: Math.round(toNumber(bounds.top) || 0),
+        right: Math.round(toNumber(bounds.right) || 0),
+        bottom: Math.round(toNumber(bounds.bottom) || 0),
+        width: Math.round(toNumber(bounds.width) || 0),
+        height: Math.round(toNumber(bounds.height) || 0),
+      } : null;
+      call.boundsMatchSelection = rectsMatchWithinTolerance(bounds, selectionInfo, 1.5);
+      if (!call.boundsMatchSelection) {
+        console.warn("[OpenAI Photoshop Generator] direct selection patch layer bounds mismatch", JSON.stringify({
+          expected: selectionInfo || null,
+          actual: call.layerBounds,
+        }));
+      }
+    }
+    return result;
+  };
+
+  try {
+    return await callback(diagnostics);
+  } finally {
+    requestGenerations = originals.requestGenerations;
+    requestEdits = originals.requestEdits;
+    requestKoukoutuCutout = originals.requestKoukoutuCutout;
+    requestSemanticSplitLayers = originals.requestSemanticSplitLayers;
+    expandCanvasForOutpaint = originals.expandCanvasForOutpaint;
+    placeResultAsLayer = originals.placeResultAsLayer;
+    saveSettings = originals.saveSettings;
+    saveHistoryItem = originals.saveHistoryItem;
+  }
+}
+
+async function createOfflineDiagnosticDocument() {
+  let diagnosticDoc = null;
+  await core.executeAsModal(async () => {
+    diagnosticDoc = await app.documents.add({
+      width: 384,
+      height: 384,
+      resolution: 72,
+      mode: "RGBColorMode",
+      fill: "white",
+    });
+  }, { commandName: "Create OpenAI offline diagnostics document" });
+
+  const fullRect = { left: 0, top: 0, right: 384, bottom: 384, width: 384, height: 384 };
+  await placeResultAsLayer({
+    b64: createOfflineDiagnosticPngBase64(384, 384, "fixture"),
+    format: "png",
+  }, fullRect, "Offline Diagnostic Fixture", null, { preserveImageAspect: true });
+  return diagnosticDoc || app.activeDocument;
+}
+
+async function closeDiagnosticDocument(documentRef) {
+  if (!documentRef) return;
+  try {
+    await core.executeAsModal(async () => {
+      if (typeof documentRef.closeWithoutSaving === "function") {
+        await documentRef.closeWithoutSaving();
+        return;
+      }
+      const documentId = getDocumentId(documentRef);
+      if (!documentId) {
+        console.warn("[OpenAI Photoshop Generator] close offline diagnostics document skipped: missing document id");
+        return;
+      }
+      await action.batchPlay([
+        {
+          _obj: "close",
+          _target: [{ _ref: "document", _id: documentId }],
+          saving: { _enum: "yesNo", _value: "no" },
+          _options: { dialogOptions: "dontDisplay" },
+        },
+      ], { modalBehavior: "execute" });
+    }, { commandName: "Close OpenAI offline diagnostics document" });
+  } catch (error) {
+    console.warn("[OpenAI Photoshop Generator] close offline diagnostics document failed", error);
+  }
+}
+
+function getDocumentId(documentRef) {
+  const value = documentRef?._id ?? documentRef?.id;
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function createOfflineDiagnosticPngBase64(width, height, variant = "default", options = {}) {
+  const safeWidth = Math.max(1, Math.min(1536, Math.round(width || 512)));
+  const safeHeight = Math.max(1, Math.min(1536, Math.round(height || 512)));
+  const rgba = new Uint8Array(safeWidth * safeHeight * 4);
+  const transparent = Boolean(options.transparent);
+  const whiteMatte = Boolean(options.whiteMatte);
+  for (let index = 0; index < rgba.length; index += 4) {
+    rgba[index] = transparent ? 0 : 255;
+    rgba[index + 1] = transparent ? 0 : 255;
+    rgba[index + 2] = transparent ? 0 : 255;
+    rgba[index + 3] = transparent ? 0 : 255;
+  }
+
+  const offset = Number(options.offset || 0);
+  const hue = hashStringToByte(variant);
+  const primary = [220, Math.max(40, hue), 42 + ((hue + 80) % 120), 255];
+  const secondary = [40 + ((hue + 50) % 180), 120, 220, 255];
+  const margin = Math.max(8, Math.round(Math.min(safeWidth, safeHeight) * 0.08));
+  fillRgbaRect(rgba, safeWidth, safeHeight, margin, margin, safeWidth - margin, safeHeight - margin, [245, 245, 245, transparent ? 0 : 255]);
+  fillRgbaRect(rgba, safeWidth, safeHeight, margin * 2 + offset * 28, margin * 2, Math.round(safeWidth * 0.58), Math.round(safeHeight * 0.62), primary);
+  fillRgbaRect(rgba, safeWidth, safeHeight, Math.round(safeWidth * 0.48), Math.round(safeHeight * 0.36 + offset * 22), safeWidth - margin * 2, safeHeight - margin * 2, secondary);
+  drawRgbaCircle(rgba, safeWidth, safeHeight, Math.round(safeWidth * 0.5), Math.round(safeHeight * 0.5), Math.max(8, Math.round(Math.min(safeWidth, safeHeight) * 0.09)), [255, 255, 255, 255]);
+  if (whiteMatte) {
+    rgba[3] = 255;
+  }
+  return bytesToBase64(encodePngRgba(safeWidth, safeHeight, rgba));
+}
+
+function fillRgbaRect(rgba, width, height, left, top, right, bottom, color) {
+  const x1 = Math.max(0, Math.min(width, Math.floor(left)));
+  const y1 = Math.max(0, Math.min(height, Math.floor(top)));
+  const x2 = Math.max(x1, Math.min(width, Math.ceil(right)));
+  const y2 = Math.max(y1, Math.min(height, Math.ceil(bottom)));
+  for (let y = y1; y < y2; y += 1) {
+    for (let x = x1; x < x2; x += 1) {
+      const index = (y * width + x) * 4;
+      rgba[index] = color[0];
+      rgba[index + 1] = color[1];
+      rgba[index + 2] = color[2];
+      rgba[index + 3] = color[3];
+    }
+  }
+}
+
+function drawRgbaCircle(rgba, width, height, centerX, centerY, radius, color) {
+  const r2 = radius * radius;
+  const left = Math.max(0, centerX - radius);
+  const right = Math.min(width, centerX + radius);
+  const top = Math.max(0, centerY - radius);
+  const bottom = Math.min(height, centerY + radius);
+  for (let y = top; y < bottom; y += 1) {
+    for (let x = left; x < right; x += 1) {
+      const dx = x - centerX;
+      const dy = y - centerY;
+      if ((dx * dx) + (dy * dy) > r2) continue;
+      const index = (y * width + x) * 4;
+      rgba[index] = color[0];
+      rgba[index + 1] = color[1];
+      rgba[index + 2] = color[2];
+      rgba[index + 3] = color[3];
+    }
+  }
+}
+
+function hashStringToByte(value) {
+  let hash = 0;
+  for (const char of String(value || "")) {
+    hash = ((hash * 31) + char.charCodeAt(0)) % 255;
+  }
+  return hash;
 }
 
 async function runModeSmoke(mode, prompt) {
@@ -1388,7 +1906,21 @@ async function selectMouthSmokeRect() {
 
 function buildPrompt(prompt, negative) {
   if (!negative) return prompt;
-  return `${prompt}\n\nAvoid: ${negative}`;
+  const preservationConstraint = isPreservationConstraintText(negative);
+  return [
+    prompt,
+    "",
+    preservationConstraint
+      ? `补充保护约束 / Preservation constraints: ${negative}`
+      : `补充约束 / Negative constraints: ${negative}`,
+    preservationConstraint
+      ? "这些内容描述的是必须保持不变的对象或区域，不是要避免生成的对象。请把它们当作硬性保护参考。"
+      : "如果这些内容描述的是“不要改变、保持、保留”的对象，请把它们当作必须保持不变的保护约束；如果描述的是不希望出现的内容，请避免生成它们。",
+  ].join("\n");
+}
+
+function isPreservationConstraintText(value) {
+  return /不要(?:改变|改动|动|碰|重画|替换|影响)|保持(?:不变|原样|一致)|保留|不变|别(?:改|动|碰)|不能(?:改|动)|must\s+(?:stay|remain)|do\s+not\s+(?:change|touch|modify|redraw|replace)|keep|preserve/i.test(String(value || ""));
 }
 
 function getInpaintSettings(settings) {
@@ -1464,6 +1996,18 @@ function buildConstrainedImageEditPrompt(prompt, mode) {
     ].join("\n");
   }
 
+  if (mode === "inpaintScreenshot") {
+    return [
+      userPrompt,
+      "",
+      "按普通上传图片编辑，不按蒙版理解；白色背景只是截图底色。",
+      "只做用户要求的局部修改。用户明确要求不变的物体必须保持原样，不要重画、替换或添加无关内容。",
+      "如果要求移除覆盖在物体上的元素，只移除覆盖元素，并尽量补全被遮挡物，不改变被保护物体。",
+      ...getScreenshotReferenceEditGuidance(userPrompt),
+      "保持原截图构图、比例、位置和边距；不要裁切、放大、缩小、旋转或重新居中主体。",
+    ].join("\n");
+  }
+
   if (mode === "referenceNoMask" || mode === "reference") {
     return [
       userPrompt,
@@ -1490,20 +2034,7 @@ function buildConstrainedImageEditPrompt(prompt, mode) {
 function getImageEditAmbiguityGuidance(prompt, mode) {
   const value = String(prompt || "").trim();
   if (!value || (mode !== "inpaint" && mode !== "referenceNoMask" && mode !== "reference")) return [];
-
-  const lower = value.toLowerCase();
-  const mentionsRibbonBow = /蝴蝶结|蝴蝶結|丝带结|絲帶結|发结|髮結|bow\s*tie|ribbon\s*bow|hair\s*bow|decorative\s*bow/.test(lower);
-  const mentionsArcheryBowCn = /弓箭|武器弓|长弓|長弓|反曲弓|复合弓|複合弓|弓身|弓弦|箭弓|射箭/.test(value);
-  const mentionsBareBowCn = /弓/.test(value) && !mentionsRibbonBow;
-  const mentionsArcheryBowEn = /\b(archery|weapon|recurve|longbow|compound|arrow|bowstring)\b/.test(lower) ||
-    (/\bbow\b/.test(lower) && /\b(hand|hands|finger|fingers|arrow|string|weapon|archery|remove|erase|delete)\b/.test(lower) && !mentionsRibbonBow);
-
-  if (!mentionsArcheryBowCn && !mentionsBareBowCn && !mentionsArcheryBowEn) return [];
-
-  return [
-    "消歧：这里的“弓”指弓箭/武器弓，不是蝴蝶结、发结、领结、丝带结或装饰结。",
-    "保留原来的弓身、弓弦、材质和造型；只做用户要求的局部修改，不要新增蝴蝶结、丝带、领结或装饰结。",
-  ];
+  return [];
 }
 
 async function requestGenerations(settings, prompt) {
@@ -1574,11 +2105,15 @@ function shouldUseResponsesTextImageGenerationDirectly(settings) {
 function shouldUseResponsesGenerationFallback(response, settings) {
   return Boolean(
     response &&
-    response.status === 404 &&
+    isMissingImageEndpointStatus(response.status) &&
     /\/images\/generations$/i.test(normalizePath(settings.generationPath || "/images/generations")) &&
     settings.apiKey &&
     settings.baseUrl
   );
+}
+
+function isMissingImageEndpointStatus(status) {
+  return status === 404 || status === 405 || status === 501;
 }
 
 function markGenerationEndpointUnsupported(settings) {
@@ -1590,8 +2125,8 @@ function getGenerationEndpointKey(settings) {
 }
 
 async function requestResponsesTextImageGeneration(settings, prompt) {
-  const payload = {
-    model: DEFAULT_SEMANTIC_EDIT_MODEL,
+  const buildPayload = (mainModel) => ({
+    model: mainModel,
     input: [
       {
         role: "user",
@@ -1606,41 +2141,22 @@ async function requestResponsesTextImageGeneration(settings, prompt) {
     tools: [
       {
         type: "image_generation",
+        ...(getResponsesImageToolModel(settings.model) ? { model: getResponsesImageToolModel(settings.model) } : {}),
         size: settings.size || "auto",
         quality: normalizeResponsesImageQuality(settings.quality),
         output_format: normalizeImageOutputFormat(settings.format),
       },
     ],
     tool_choice: { type: "image_generation" },
-  };
-
-  const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${settings.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
+  });
+  const { json } = await sendResponsesJsonWithMainModelFallback(settings, buildPayload, {
+    kind: "Responses 文生图",
     timeoutMs: state.requestTimeoutMs || 180000,
-  }, "Responses 文生图");
-
-  const text = await response.text();
-  const json = parseResponsesJsonText(text);
-  if (!json) {
-    throw new Error(`Responses 文生图返回异常：${text.slice(0, 300)}`);
-  }
-
-  if (!response.ok) {
-    throw new Error(formatOpenAIResponseError(response, formatOpenAIError(json, response.statusText), {
-      kind: "Responses 文生图",
-      endpointPath: "/responses",
-      endpointUrl: buildApiUrl(settings.baseUrl, "/responses"),
-    }));
-  }
+  });
 
   const items = parseResponsesImageGenerationItems(json, settings.format);
   if (!items.length) {
-    throw new Error("Responses 文生图成功，但没有返回 image_generation_call 图片");
+    throw createNoResponsesImageError("Responses 文生图", json, text, response);
   }
   return items;
 }
@@ -1748,7 +2264,7 @@ async function requestGptSplitTargets(settings, imageB64, docSize, userPrompt) {
           },
           {
             type: "input_image",
-            image_url: `data:image/png;base64,${stripDataUrl(imageB64)}`,
+            image_url: toDataUrl(imageB64, inferImageFormatFromValue(imageB64) || "png"),
             detail: "low",
           },
         ],
@@ -1894,7 +2410,7 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
     return requestSingleComfyEdit(settings, prompt, imageB64, maskB64, options);
   }
 
-  if (shouldUseChatGptStyleResponsesEdit(settings, Boolean(maskB64))) {
+  if (shouldUseChatGptStyleResponsesEdit(settings, Boolean(maskB64), options)) {
     try {
       setStatus(maskB64
         ? "正在用 ChatGPT 风格 Responses 图像工具重绘选区..."
@@ -1903,6 +2419,12 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
     } catch (error) {
       if (!isResponsesEditEndpointUnsupported(error)) {
         throw error;
+      }
+      if (options.screenshotReferenceEdit) {
+        console.warn("[image-edit] Responses screenshot edit unavailable; refusing unsafe /images/edits fallback", error?.message || error);
+        const safeError = new Error(`ChatGPT 风格截图重绘不可用，已停止以避免退回旧的 Mask/兼容编辑路径：${error.message || error}`);
+        safeError.cause = error;
+        throw safeError;
       }
       console.warn("[image-edit] Responses image_generation unavailable; falling back to /images/edits", error?.message || error);
       markResponsesEditEndpointUnsupported(settings);
@@ -1927,14 +2449,41 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
   }
   form.append("quality", settings.quality);
   form.append("output_format", settings.format);
-  const inputFidelity = getImageEditInputFidelity(settings.model, Boolean(maskB64));
+  const inputFidelity = getImageEditInputFidelity(settings.model, true);
   if (inputFidelity) {
     form.append("input_fidelity", inputFidelity);
   }
-  form.append("image", base64ToBlob(imageB64, "image/png"), "input.png");
+  const imageFormat = inferImageFormatFromValue(imageB64) || "png";
+  const maskFormat = maskB64 ? (inferImageFormatFromValue(maskB64) || "png") : null;
+  form.append("image", base64ToBlob(imageB64, mimeTypeForFormat(imageFormat)), `input.${fileExtensionForFormat(imageFormat)}`);
   if (maskB64) {
-    form.append("mask", base64ToBlob(maskB64, "image/png"), "mask.png");
+    form.append("mask", base64ToBlob(maskB64, mimeTypeForFormat(maskFormat)), `mask.${fileExtensionForFormat(maskFormat)}`);
   }
+
+  await saveDebugJsonFile("openai-last-images-edit-request.json", {
+    pluginVersion: PLUGIN_VERSION,
+    endpointPath: settings.editPath,
+    endpointUrl: sanitizeDebugEndpointUrl(buildApiUrl(settings.baseUrl, settings.editPath)),
+    route: maskB64 ? "mask-edit" : "reference-edit",
+    hasMask: Boolean(maskB64),
+    screenshotReferenceEdit: Boolean(options.screenshotReferenceEdit),
+    imageBytes,
+    maskBytes,
+    imageFormat,
+    maskFormat,
+    model: settings.model,
+    size: requestSize || null,
+    quality: settings.quality,
+    outputFormat: settings.format,
+    inputFidelity: inputFidelity || null,
+    inputFidelityMode: getImageEditInputFidelityDebugMode(settings.model, inputFidelity),
+    imageFileName: `input.${fileExtensionForFormat(imageFormat)}`,
+    maskFileName: maskFormat ? `mask.${fileExtensionForFormat(maskFormat)}` : null,
+    referenceSize: options.referenceSize || null,
+    referenceCanvasSize: options.referenceCanvasSize || null,
+    referenceCropBox: options.referenceCropBox || null,
+    prompt: String(prompt || ""),
+  });
 
   setStatus(maskB64
     ? `正在上传局部编辑：图像 ${formatBytes(imageBytes)}，Mask ${formatBytes(maskBytes)}`
@@ -1963,7 +2512,7 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
       const detail = await readResponseTextSafe(response);
       console.warn("[image-edit] /images/edits unavailable; falling back to /responses image_generation", detail);
       markEditEndpointUnsupported(settings);
-      setStatus("当前服务没有 /images/edits，正在改用 Responses 图像工具重绘选区...");
+      setStatus("当前服务没有 /images/edits，正在改用 Responses 图像工具编辑参考图...");
       return await requestResponsesImageEditFallback(settings, prompt, imageB64, maskB64, options);
     }
     return await parseOpenAIImageResponse(response, {
@@ -1976,8 +2525,9 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
   }
 }
 
-function shouldUseChatGptStyleResponsesEdit(settings, hasMask = false) {
+function shouldUseChatGptStyleResponsesEdit(settings, hasMask = false, options = {}) {
   if (!settings?.apiKey || !settings?.baseUrl) return false;
+  if (options.screenshotReferenceEdit) return true;
   if (state.unsupportedResponsesEditEndpoints?.has?.(getResponsesEditEndpointKey(settings))) return false;
   // Codex sidecar now exposes OpenAI-compatible /images/edits and internally
   // forwards multipart mask edits through the Responses image toolchain. Prefer
@@ -1993,7 +2543,7 @@ function shouldUseChatGptStyleResponsesEdit(settings, hasMask = false) {
 function shouldUseSidecarImageEndpointsFirst(settings, hasMask = false) {
   if (!settings?.apiKey || !settings?.baseUrl) return false;
   if (!isCodexSidecarBaseUrl(settings.baseUrl)) return false;
-  if (hasMask && state.unsupportedEditEndpoints?.has?.(getEditEndpointKey(settings))) return false;
+  if (state.unsupportedEditEndpoints?.has?.(getEditEndpointKey(settings))) return false;
   return true;
 }
 
@@ -2014,8 +2564,7 @@ function shouldUseResponsesImageGenerationDirectly(settings, maskB64) {
 function shouldUseResponsesImageFallback(response, settings, maskB64) {
   return Boolean(
     response &&
-    response.status === 404 &&
-    maskB64 &&
+    isMissingImageEndpointStatus(response.status) &&
     /\/images\/edits$/i.test(normalizePath(settings.editPath || "/images/edits")) &&
     !state.unsupportedResponsesEditEndpoints?.has?.(getResponsesEditEndpointKey(settings)) &&
     settings.apiKey &&
@@ -2023,11 +2572,23 @@ function shouldUseResponsesImageFallback(response, settings, maskB64) {
   );
 }
 
-function getImageEditInputFidelity(model, hasMask = false) {
+function getImageEditInputFidelity(model, preserveInput = false) {
   const value = String(model || "").toLowerCase();
-  if (!hasMask) return "";
-  if (/gpt-image-1|chatgpt-image-latest/.test(value)) return "high";
+  if (!preserveInput) return "";
+  if (/gpt-image-[\w.-]*mini/.test(value)) return "";
+  if (isGptImage2Model(model)) return "";
+  if (/^(?:gpt-image|chatgpt-image)/.test(value) || /chatgpt-image-latest/.test(value)) return "high";
   return "";
+}
+
+function isGptImage2Model(model) {
+  return /^gpt-image-2(?:$|[-_.:])/i.test(String(model || "").trim());
+}
+
+function getImageEditInputFidelityDebugMode(model, explicitFidelity = "") {
+  if (explicitFidelity) return "explicit-high";
+  if (isGptImage2Model(model)) return "automatic-high";
+  return null;
 }
 
 function markEditEndpointUnsupported(settings) {
@@ -2058,96 +2619,192 @@ function isResponsesEditEndpointUnsupported(error) {
 async function requestResponsesImageEditFallback(settings, prompt, imageB64, maskB64, options = {}) {
   const imageBytes = estimateBase64Bytes(imageB64);
   const maskBytes = maskB64 ? estimateBase64Bytes(maskB64) : 0;
-  const payload = {
-    model: DEFAULT_SEMANTIC_EDIT_MODEL,
+  const imageFormat = inferImageFormatFromValue(imageB64) || "png";
+  const maskFormat = maskB64 ? (inferImageFormatFromValue(maskB64) || "png") : "png";
+  const promptText = buildResponsesImageEditPrompt(prompt, Boolean(maskB64), options);
+  const textInputPart = {
+    type: "input_text",
+    text: promptText,
+  };
+  const imageInputPart = {
+    type: "input_image",
+    image_url: toDataUrl(imageB64, imageFormat),
+    detail: "high",
+  };
+  const inputContent = options.screenshotReferenceEdit
+    ? [imageInputPart, textInputPart]
+    : [textInputPart, imageInputPart];
+  const buildPayload = (mainModel) => ({
+    model: mainModel,
     input: [
       {
         role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: buildResponsesImageEditPrompt(prompt, Boolean(maskB64), options),
-          },
-          {
-            type: "input_image",
-            image_url: `data:image/png;base64,${stripDataUrl(imageB64)}`,
-            detail: "high",
-          },
-        ].filter(Boolean),
+        content: inputContent.filter(Boolean),
       },
     ],
     tools: [
       {
         type: "image_generation",
-        ...(getResponsesImageEditModel(settings.model) ? { model: getResponsesImageEditModel(settings.model) } : {}),
+        ...(getResponsesImageToolModel(settings.model) ? { model: getResponsesImageToolModel(settings.model) } : {}),
         size: options.size || settings.size || "auto",
         quality: normalizeResponsesImageQuality(settings.quality),
         output_format: normalizeImageOutputFormat(settings.format),
         action: "edit",
-        ...(maskB64 ? { input_image_mask: { image_url: `data:image/png;base64,${stripDataUrl(maskB64)}` } } : {}),
-        ...(getImageEditInputFidelity(settings.model, Boolean(maskB64))
-          ? { input_fidelity: getImageEditInputFidelity(settings.model, Boolean(maskB64)) }
+        ...(maskB64 ? { input_image_mask: { image_url: toDataUrl(maskB64, maskFormat) } } : {}),
+        ...(getImageEditInputFidelity(settings.model, true)
+          ? { input_fidelity: getImageEditInputFidelity(settings.model, true) }
           : {}),
       },
     ],
     tool_choice: { type: "image_generation" },
-  };
+  });
+  const initialPayload = buildPayload(DEFAULT_SEMANTIC_EDIT_MODEL);
 
-  setStatus(`正在用 Responses 图像工具重绘：图像 ${formatBytes(imageBytes)}，Mask ${formatBytes(maskBytes)}`);
-  const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${settings.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
+  if (options.screenshotReferenceEdit && initialPayload.tools?.some?.((tool) => tool?.input_image_mask)) {
+    throw new Error("选区截图重绘请求意外包含 API Mask，已停止发送以避免走错旧重绘路径");
+  }
+
+  await saveDebugJsonFile("openai-last-responses-edit-request.json", {
+    pluginVersion: PLUGIN_VERSION,
+    endpointPath: "/responses",
+    route: maskB64 ? "mask-edit" : (options.screenshotReferenceEdit ? "screenshot-reference-edit" : "reference-edit"),
+    hasMask: Boolean(maskB64),
+    screenshotReferenceEdit: Boolean(options.screenshotReferenceEdit),
+    imageBytes,
+    maskBytes,
+    imageFormat,
+    maskFormat: maskB64 ? maskFormat : null,
+    mainModel: initialPayload.model,
+    mainModelFallbacks: getResponsesMainModelCandidates().filter((model) => model !== initialPayload.model),
+    imageToolModel: initialPayload.tools?.[0]?.model || null,
+    imageToolAction: initialPayload.tools?.[0]?.action || null,
+    imageToolSize: initialPayload.tools?.[0]?.size || null,
+    imageToolQuality: initialPayload.tools?.[0]?.quality || null,
+    imageToolOutputFormat: initialPayload.tools?.[0]?.output_format || null,
+    imageToolInputFidelity: initialPayload.tools?.[0]?.input_fidelity || null,
+    imageToolInputFidelityMode: getImageEditInputFidelityDebugMode(settings.model, initialPayload.tools?.[0]?.input_fidelity || ""),
+    payloadHasInputImageMask: Boolean(initialPayload.tools?.some?.((tool) => tool?.input_image_mask)),
+    referenceSize: options.referenceSize || null,
+    referenceCanvasSize: options.referenceCanvasSize || null,
+    referenceCropBox: options.referenceCropBox || null,
+    inputContentOrder: options.screenshotReferenceEdit ? "image-first" : "text-first",
+    prompt: promptText,
+  });
+
+  const uploadStatus = maskB64
+    ? `正在用 Responses 图像工具重绘：图像 ${formatBytes(imageBytes)}，Mask ${formatBytes(maskBytes)}`
+    : options.screenshotReferenceEdit
+      ? `正在用 Responses 图像工具按普通上传截图编辑：图像 ${formatBytes(imageBytes)}，无 API Mask`
+      : `正在用 Responses 图像工具编辑参考图：图像 ${formatBytes(imageBytes)}，无 API Mask`;
+  setStatus(uploadStatus);
+  const { json } = await sendResponsesJsonWithMainModelFallback(settings, buildPayload, {
+    kind: "Responses 图像重绘",
     timeoutMs: options.timeoutMs || state.requestTimeoutMs || 12 * 60 * 1000,
-  }, "Responses 图像重绘");
-
-  const text = await response.text();
-  let json = parseResponsesJsonText(text);
-  if (!json) {
-    const error = new Error(`Responses 图像重绘返回异常：${text.slice(0, 300)}`);
-    error.status = response.status;
-    error.responseText = text;
-    throw error;
-  }
-
-  if (!response.ok) {
-    const error = new Error(formatOpenAIResponseError(response, formatOpenAIError(json, response.statusText), {
-      kind: "Responses 图像重绘",
-      endpointPath: "/responses",
-      endpointUrl: buildApiUrl(settings.baseUrl, "/responses"),
-    }));
-    error.status = response.status;
-    error.responseText = text;
-    throw error;
-  }
+  });
 
   const items = parseResponsesImageGenerationItems(json, settings.format, {
     skipPreviewCrop: true,
   });
   if (!items.length) {
-    const outputText = extractResponsesOutputText(json);
-    const outputTypes = extractResponsesOutputTypes(json);
+    const error = createNoResponsesImageError("Responses 图像重绘", json, text, response);
     console.warn("[responses-edit] no image_generation_call; falling back when possible", {
-      outputTypes,
-      outputText: outputText.slice(0, 240),
+      outputTypes: error.responsesOutputTypes,
+      outputText: extractResponsesOutputText(json).slice(0, 240),
     });
-    const error = new Error(outputText
-      ? `Responses 图像重绘没有返回图片：${outputText.slice(0, 180)}`
-      : "Responses 图像重绘成功，但没有返回 image_generation_call 图片");
-    error.noImageGenerationCall = true;
-    error.status = response.status;
-    error.responseText = text;
-    error.responseJson = json;
-    error.responsesOutputTypes = outputTypes;
     throw error;
   }
   return items;
 }
 
-function getResponsesImageEditModel(model) {
+function getResponsesMainModelCandidates() {
+  return [...new Set(RESPONSES_MAIN_MODEL_FALLBACKS.filter(Boolean))];
+}
+
+function isResponsesMainModelUnavailable(json, rawText = "") {
+  const error = json?.error || json;
+  const fields = [
+    error?.code,
+    error?.type,
+    error?.param,
+    error?.message,
+    rawText,
+  ].map((value) => String(value || "").toLowerCase());
+  const text = fields.join(" ");
+  return /model_not_available|model_not_found|model_not_found_error|model_not_exist|model.*not.*available|model.*not.*found|does not have access to model|do not have access to model|invalid.*model/.test(text);
+}
+
+async function sendResponsesJsonWithMainModelFallback(settings, buildPayload, options = {}) {
+  const candidates = getResponsesMainModelCandidates();
+  const kind = options.kind || "Responses 请求";
+  let lastError = null;
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const mainModel = candidates[index];
+    const payload = buildPayload(mainModel);
+    const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${settings.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      timeoutMs: options.timeoutMs || state.requestTimeoutMs || 180000,
+    }, kind);
+
+    const text = await response.text();
+    const json = parseResponsesJsonText(text);
+    if (!json) {
+      const error = new Error(`${kind}返回异常：${text.slice(0, 300)}`);
+      error.status = response.status;
+      error.responseText = text;
+      throw error;
+    }
+
+    if (response.ok) {
+      return { response, text, json, payload, mainModel };
+    }
+
+    const error = new Error(formatOpenAIResponseError(response, formatOpenAIError(json, response.statusText), {
+      kind,
+      endpointPath: "/responses",
+      endpointUrl: buildApiUrl(settings.baseUrl, "/responses"),
+    }));
+    error.status = response.status;
+    error.responseText = text;
+    error.responsesMainModel = mainModel;
+    lastError = error;
+
+    if (index < candidates.length - 1 && isResponsesMainModelUnavailable(json, text)) {
+      const nextModel = candidates[index + 1];
+      console.warn(`[responses] main model ${mainModel} unavailable; retrying with ${nextModel}`);
+      setStatus(`${kind}主控模型 ${mainModel} 不可用，正在改用 ${nextModel} 重试...`);
+      continue;
+    }
+
+    throw error;
+  }
+
+  throw lastError || new Error(`${kind}失败：没有可用的 Responses 主控模型`);
+}
+
+function createNoResponsesImageError(kind, json, rawText, response = {}) {
+  const outputText = extractResponsesOutputText(json);
+  const outputTypes = extractResponsesOutputTypes(json);
+  const details = [];
+  if (outputTypes) details.push(`output 类型：${outputTypes}`);
+  if (outputText) details.push(`文本：${outputText.slice(0, 180)}`);
+  const error = new Error(details.length
+    ? `${kind}成功，但没有返回 image_generation_call 图片（${details.join("；")}）`
+    : `${kind}成功，但没有返回 image_generation_call 图片`);
+  error.noImageGenerationCall = true;
+  error.status = response.status;
+  error.responseText = rawText;
+  error.responseJson = json;
+  error.responsesOutputTypes = outputTypes;
+  return error;
+}
+
+function getResponsesImageToolModel(model) {
   const value = String(model || "").trim();
   if (/^(?:gpt-image|chatgpt-image)/i.test(value)) return value;
   return "";
@@ -2155,6 +2812,38 @@ function getResponsesImageEditModel(model) {
 
 function buildResponsesImageEditPrompt(prompt, hasMask, options = {}) {
   const size = options.size ? `Requested output size: ${options.size}.` : "";
+  const referenceSize = options.referenceSize ? `Selected Photoshop crop size: ${options.referenceSize}.` : "";
+  const referenceCanvasSize = options.referenceCanvasSize ? `Uploaded white reference canvas size: ${options.referenceCanvasSize}.` : "";
+  const referenceCropBox = options.referenceCropBox ? `Selected crop box inside uploaded canvas: ${options.referenceCropBox}.` : "";
+  if (!hasMask && options.screenshotReferenceEdit) {
+    return [
+      String(prompt || "").trim(),
+      "",
+      "按普通上传图片编辑，不按蒙版理解；白色背景只是截图底色。",
+      "Edit the provided image like a normal uploaded image in ChatGPT. It is NOT a mask; the white background is only screenshot background.",
+      referenceSize,
+      referenceCanvasSize,
+      referenceCropBox,
+      "用户文字是唯一编辑规格：只处理被明确点名要改变或移除的区域；任何被说成不变、不要动、保持、保留的对象都是受保护参考。",
+      "The user's text is the only edit specification: change or remove only the explicitly named target. Anything described as unchanged, do not touch, preserve, keep, or stay the same is protected reference content.",
+      "The uploaded image is the selected Photoshop crop itself on a white matte. Treat the crop edges as the exact composition boundary.",
+      "If a legacy upload includes white padding around the crop, use that padding only as context; do not move, zoom, recenter, shrink, or redesign the selected subject.",
+      "Return either the same uploaded white reference canvas aligned to the input, or only the selected Photoshop crop. Do not invent an unrelated square canvas or add a new white border.",
+      "只做用户要求的局部修改；没有被点名要改的可见线条、颜色、轮廓、材质和位置都必须保持原样。",
+      "Do not redraw visible protected pixels. Keep unchanged lines, colors, contours, texture, scale, and position exactly as the input shows them.",
+      "Make only the requested local change. If the user says an object must stay unchanged, keep that object as the protected reference.",
+      "如果要移除遮挡物，只补全遮挡物下面缺失的部分；不要重新设计、替换、重画或移动仍然可见的被保护物体。",
+      "If removing an unwanted element that overlaps a protected object, remove only the unwanted element and reconstruct the protected object underneath without redesigning it.",
+      ...getScreenshotReferenceEditGuidance(prompt),
+      "Preserve the screenshot framing, object scale, position, rotation, and white-background margins. Do not crop, zoom, resize, shrink, recenter, or rotate the subject.",
+      "The protected object's visible footprint and bounding box inside the selected crop must stay the same size as the input; do not make it occupy less of the crop.",
+      "保持输出和上传截图或原选区对齐；不要把长方形参考图变成无关方图。",
+      "Do not add unrelated decorations, frames, ribbons, boxes, labels, text, UI elements, or new objects.",
+      "Return one clean PNG image aligned to the provided screenshot.",
+      size,
+    ].filter(Boolean).join("\n");
+  }
+
   return [
     "Edit the provided Photoshop image as a local inpaint task.",
     hasMask
@@ -2163,7 +2852,7 @@ function buildResponsesImageEditPrompt(prompt, hasMask, options = {}) {
     hasMask
       ? "Do not draw masks, rectangles, black boxes, guides, borders, or overlays. Keep every unmasked detail visually identical, including edges that touch the brush boundary."
       : "",
-    "Return one PNG image. Preserve the same composition, identity, line art, colors, lighting, shading, scale, and 2D game-icon style.",
+    "Return one PNG image. Preserve the same composition, identity, line art, colors, lighting, shading, scale, and original visual style.",
     "Do not redesign the character, head, eyes, nose, ears, hair, scarf, props, background, or any unrelated details.",
     "The result will be composited back into the original Photoshop document, so keep the requested change aligned to the original image and make boundary transitions natural.",
     size,
@@ -2172,24 +2861,111 @@ function buildResponsesImageEditPrompt(prompt, hasMask, options = {}) {
   ].filter(Boolean).join("\n");
 }
 
+function getScreenshotReferenceEditGuidance(prompt) {
+  const value = String(prompt || "").trim();
+  if (!value) return [];
+  return [
+    "如果用户要求移除或修改某个元素，把该元素在截图中对应的完整可见形状都当作编辑目标，包括连接部分、内部纹理、阴影、半透明边缘和与保护物体接触的部分；不要因为它贴在受保护内容上就把它保留下来。",
+    "用户说保持、不变、不要动或保留的内容是保护参考；只重建被编辑目标遮住的缺失部分，不要重画、替换、移动或重新设计仍然可见的保护内容。",
+    "If the user asks to remove or change a named element, treat the complete visible shape of that element as the edit target, including connected parts, internal marks, shadows, translucent edges, and contact areas touching protected content.",
+    "Anything the user describes as unchanged, preserved, kept, or not touched is protected reference content. Reconstruct only the pixels hidden underneath the edited target; do not redraw visible protected content.",
+  ];
+}
+
 function parseResponsesImageGenerationItems(json, fallbackFormat = "png", options = {}) {
-  const output = Array.isArray(json?.output) ? json.output : [];
+  const output = getResponsesOutputItems(json);
   return output
-    .filter((item) => item?.type === "image_generation_call" && typeof item.result === "string" && item.result.length)
-    .map((item) => ({
-      b64: item.result,
-      format: item.output_format || normalizeImageOutputFormat(fallbackFormat),
-      skipMaskComposite: Boolean(options.skipMaskComposite),
-      skipPreviewCrop: Boolean(options.skipPreviewCrop),
-    }));
+    .filter((item) => item?.type === "image_generation_call")
+    .map((item) => {
+      const image = extractResponsesImageCallImage(item);
+      return {
+        ...image,
+        format: extractResponsesImageCallFormat(item, fallbackFormat, image.format),
+        skipMaskComposite: Boolean(options.skipMaskComposite),
+        skipPreviewCrop: Boolean(options.skipPreviewCrop),
+      };
+    })
+    .filter((item) => item.b64 || item.url);
+}
+
+function extractResponsesImageCallImage(item) {
+  const candidates = [];
+  const addCandidate = (value, format = null) => candidates.push({ value, format });
+  addCandidate(item?.result, item?.output_format || item?.format || null);
+  addCandidate(item?.b64_json, item?.output_format || item?.format || null);
+  addCandidate(item?.b64, item?.output_format || item?.format || null);
+  addCandidate(item?.image_base64, item?.output_format || item?.format || null);
+  addCandidate(item?.data_url, item?.output_format || item?.format || null);
+  addCandidate(item?.url, item?.output_format || item?.format || null);
+  addCandidate(item?.image_url, item?.output_format || item?.format || null);
+  addCandidate(item?.image_url?.url, item?.output_format || item?.format || null);
+
+  if (item?.result && typeof item.result === "object") {
+    const resultFormat = item.result.output_format || item.result.format || item?.output_format || item?.format || null;
+    addCandidate(item.result.b64_json, resultFormat);
+    addCandidate(item.result.b64, resultFormat);
+    addCandidate(item.result.image_base64, resultFormat);
+    addCandidate(item.result.data_url, resultFormat);
+    addCandidate(item.result.url, resultFormat);
+    addCandidate(item.result.image_url, resultFormat);
+    addCandidate(item.result.image_url?.url, resultFormat);
+    if (Array.isArray(item.result.data)) {
+      for (const entry of item.result.data) {
+        const entryFormat = entry?.output_format || entry?.format || resultFormat;
+        addCandidate(entry?.b64_json, entryFormat);
+        addCandidate(entry?.b64, entryFormat);
+        addCandidate(entry?.image_base64, entryFormat);
+        addCandidate(entry?.data_url, entryFormat);
+        addCandidate(entry?.url, entryFormat);
+        addCandidate(entry?.image_url, entryFormat);
+        addCandidate(entry?.image_url?.url, entryFormat);
+      }
+    }
+  }
+
+  if (Array.isArray(item?.data)) {
+    for (const entry of item.data) {
+      const entryFormat = entry?.output_format || entry?.format || item?.output_format || item?.format || null;
+      addCandidate(entry?.b64_json, entryFormat);
+      addCandidate(entry?.b64, entryFormat);
+      addCandidate(entry?.image_base64, entryFormat);
+      addCandidate(entry?.data_url, entryFormat);
+      addCandidate(entry?.url, entryFormat);
+      addCandidate(entry?.image_url, entryFormat);
+      addCandidate(entry?.image_url?.url, entryFormat);
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (typeof candidate.value !== "string" || !candidate.value.trim()) continue;
+    const value = candidate.value.trim();
+    const format = inferImageFormatFromValue(value) ||
+      (candidate.format ? normalizeImageOutputFormat(candidate.format) : "");
+    if (/^https?:\/\//i.test(value)) {
+      return { url: value, ...(format ? { format } : {}) };
+    }
+    return { b64: value, ...(format ? { format } : {}) };
+  }
+
+  return {};
+}
+
+function extractResponsesImageCallFormat(item, fallbackFormat = "png", imageFormat = null) {
+  return normalizeImageOutputFormat(imageFormat ||
+    item?.output_format ||
+    item?.format ||
+    item?.result?.output_format ||
+    item?.result?.format ||
+    fallbackFormat);
 }
 
 function extractResponsesOutputText(json) {
   if (!json || typeof json !== "object") return "";
   if (typeof json.output_text === "string") return json.output_text.trim();
+  if (typeof json.response?.output_text === "string") return json.response.output_text.trim();
 
   const chunks = [];
-  const output = Array.isArray(json.output) ? json.output : [];
+  const output = getResponsesOutputItems(json);
   for (const item of output) {
     if (typeof item?.text === "string") {
       chunks.push(item.text);
@@ -2208,18 +2984,25 @@ function extractResponsesOutputText(json) {
 }
 
 function extractResponsesOutputTypes(json) {
-  const output = Array.isArray(json?.output) ? json.output : [];
+  const output = getResponsesOutputItems(json);
   return output.map((item) => item?.type).filter(Boolean).join(", ");
+}
+
+function getResponsesOutputItems(json) {
+  if (Array.isArray(json?.output)) return json.output;
+  if (Array.isArray(json?.response?.output)) return json.response.output;
+  if (Array.isArray(json?.result?.output)) return json.result.output;
+  return [];
 }
 
 function normalizeResponsesImageQuality(quality) {
   const value = String(quality || "").toLowerCase();
-  if (["low", "medium", "high"].includes(value)) return value;
-  return "low";
+  if (["auto", "low", "medium", "high"].includes(value)) return value;
+  return "auto";
 }
 
 function normalizeImageOutputFormat(format) {
-  const value = String(format || "").toLowerCase();
+  const value = String(format || "").toLowerCase().trim().replace(/^image\//, "");
   if (value === "jpg") return "jpeg";
   if (["png", "jpeg", "webp"].includes(value)) return value;
   return "png";
@@ -2232,9 +3015,10 @@ async function requestKoukoutuCutout(settings, imageB64) {
   }
 
   const outputFormat = settings.koukoutuFormat === "webp" ? "webp" : "png";
+  const inputFormat = inferImageFormatFromValue(imageB64) || "png";
   const form = new FormData();
   form.append("model_key", "background-removal");
-  form.append("image_file", base64ToBlob(imageB64, "image/png"), "photoshop-input.png");
+  form.append("image_file", base64ToBlob(imageB64, mimeTypeForFormat(inputFormat)), `photoshop-input.${fileExtensionForFormat(inputFormat)}`);
   form.append("output_format", outputFormat);
   // Keep the returned PNG the same size as the exported Photoshop region.
   // If the API crops to the subject bbox, it does not return the crop offset,
@@ -2243,6 +3027,21 @@ async function requestKoukoutuCutout(settings, imageB64) {
   form.append("border", String(settings.koukoutuBorder || 0));
   form.append("stamp_crop", "0");
   form.append("response", "bytes");
+  await saveDebugJsonFile("cutout-last-koukoutu-request.json", {
+    pluginVersion: PLUGIN_VERSION,
+    route: "koukoutu-cutout",
+    endpointUrl: sanitizeDebugEndpointUrl(KOUKOUTU_SYNC_URL),
+    modelKey: "background-removal",
+    crop: 0,
+    stampCrop: 0,
+    border: Number(settings.koukoutuBorder || 0),
+    response: "bytes",
+    inputBytes: imageBytes,
+    inputFormat,
+    inputSize: getPngDimensionsFromBase64(imageB64) || null,
+    outputFormat,
+    apiKeyPresent: Boolean(settings.koukoutuApiKey),
+  });
 
   setProgress(64, true);
   setStatus(`正在上传到抠抠图：${formatBytes(imageBytes)}，输出 ${outputFormat.toUpperCase()}，保持原图尺寸`);
@@ -2268,13 +3067,23 @@ async function requestKoukoutuCutout(settings, imageB64) {
   if (!bytes.length) {
     throw new Error("抠抠图返回为空");
   }
+  const actualFormat = inferImageFormatFromBytes(bytes) || outputFormat;
   const outputB64 = arrayBufferToBase64(buffer);
-  await saveDebugBase64Image(`cutout-last-koukoutu-output.${outputFormat}`, outputB64);
+  await saveDebugBase64Image(`cutout-last-koukoutu-output.${actualFormat}`, outputB64);
   return {
     b64: outputB64,
     importB64: outputB64,
-    format: outputFormat,
+    format: actualFormat,
   };
+}
+
+async function normalizeCutoutResultItem(item, cutout) {
+  const targetSize = {
+    width: Math.max(1, Math.round(toNumber(cutout?.placementRect?.width) || 1)),
+    height: Math.max(1, Math.round(toNumber(cutout?.placementRect?.height) || 1)),
+  };
+  const normalized = await normalizePlacementSizedResultItem(item, targetSize, "抠图结果");
+  return normalized.item;
 }
 
 async function requestSingleComfyEdit(settings, prompt, imageB64, maskB64, options = {}) {
@@ -2393,7 +3202,7 @@ function hasManualCutoutPrompt(prompt) {
 }
 
 async function analyzeCutoutImageProfile(imageB64) {
-  const source = await loadImage(`data:image/png;base64,${stripDataUrl(imageB64)}`);
+  const source = await loadImage(toDataUrl(imageB64, inferImageFormatFromValue(imageB64) || "png"));
   const sourceWidth = source.naturalWidth || source.width;
   const sourceHeight = source.naturalHeight || source.height;
   const maxSide = 512;
@@ -2497,7 +3306,7 @@ async function requestGptCutoutPlan(settings, imageB64, profile) {
           },
           {
             type: "input_image",
-            image_url: `data:image/png;base64,${stripDataUrl(imageB64)}`,
+            image_url: toDataUrl(imageB64, inferImageFormatFromValue(imageB64) || "png"),
             detail: "low",
           },
         ],
@@ -2533,22 +3342,7 @@ async function requestGptCutoutPlan(settings, imageB64, profile) {
 }
 
 function parseGptCutoutPlan(json) {
-  if (json?.output_text) {
-    try {
-      return JSON.parse(json.output_text);
-    } catch (error) {
-      return null;
-    }
-  }
-
-  const message = (json?.output || []).find((item) => item?.type === "message");
-  const text = (message?.content || []).find((item) => item?.type === "output_text")?.text;
-  if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    return null;
-  }
+  return parseJsonFromResponseOutput(json);
 }
 
 function parseResponsesJsonText(text) {
@@ -2568,6 +3362,10 @@ function parseResponsesJsonText(text) {
       .map((line) => line.slice(5).trim())
       .filter((line) => line && line !== "[DONE]");
 
+    const events = parseResponsesSseEvents(dataLines);
+    const sseJson = buildResponsesJsonFromSseEvents(events);
+    if (sseJson) return sseJson;
+
     for (let index = dataLines.length - 1; index >= 0; index -= 1) {
       try {
         return JSON.parse(dataLines[index]);
@@ -2578,6 +3376,177 @@ function parseResponsesJsonText(text) {
   }
 
   return null;
+}
+
+function parseResponsesSseEvents(dataLines) {
+  const events = [];
+  for (const line of dataLines || []) {
+    try {
+      events.push(JSON.parse(line));
+    } catch (error) {
+      // Ignore malformed relay keepalive chunks.
+    }
+  }
+  return events;
+}
+
+function buildResponsesJsonFromSseEvents(events) {
+  if (!Array.isArray(events) || !events.length) return null;
+
+  const outputText = collectResponsesSseOutputText(events);
+  let baseResponse = null;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    const response = event?.response && typeof event.response === "object" ? event.response : null;
+    if (response && (Array.isArray(response.output) || typeof response.output_text === "string" || response.id)) {
+      baseResponse = { ...response };
+      break;
+    }
+    if (Array.isArray(event?.output) || typeof event?.output_text === "string") {
+      baseResponse = { ...event };
+      break;
+    }
+  }
+
+  const output = [];
+  for (const event of events) {
+    if (Array.isArray(event?.response?.output)) {
+      output.push(...event.response.output.filter(isResponsesOutputItem));
+    }
+    if (Array.isArray(event?.output)) {
+      output.push(...event.output.filter(isResponsesOutputItem));
+    }
+    const eventOutputItem = extractResponsesOutputItemFromSseEvent(event);
+    if (eventOutputItem) {
+      output.push(eventOutputItem);
+    }
+  }
+
+  if (!baseResponse && !outputText && !output.length) return null;
+  const json = baseResponse || {};
+  if (outputText && !json.output_text) {
+    json.output_text = outputText;
+  }
+  const mergedOutput = mergeResponsesOutputItems([
+    ...(Array.isArray(json.output) ? json.output : []),
+    ...output,
+  ]);
+  if (mergedOutput.length) {
+    json.output = mergedOutput;
+  } else if (outputText) {
+    json.output = [
+      {
+        type: "message",
+        content: [{ type: "output_text", text: outputText }],
+      },
+    ];
+  }
+  return json;
+}
+
+function isResponsesOutputItem(item) {
+  if (!item || typeof item !== "object") return false;
+  const type = String(item.type || "");
+  return type === "image_generation_call" || type === "message";
+}
+
+function extractResponsesOutputItemFromSseEvent(event) {
+  if (!event || typeof event !== "object") return null;
+  if (isResponsesOutputItem(event)) return event;
+
+  const eventType = String(event.type || "");
+  if (/image_generation(?:_call)?\.partial_image/i.test(eventType)) return null;
+
+  const containers = [event.item, event.output_item, event.image_generation_call];
+  for (const item of containers) {
+    if (isResponsesOutputItem(item)) return item;
+  }
+
+  if (!/image_generation_call/i.test(eventType)) return null;
+
+  for (const item of containers) {
+    const normalized = normalizeSseImageGenerationCall(item, event);
+    if (normalized) return normalized;
+  }
+
+  return normalizeSseImageGenerationCall(event, event);
+}
+
+function normalizeSseImageGenerationCall(item, event) {
+  if (!item || typeof item !== "object") return null;
+  const result = item.result || item.b64_json || item.b64 || item.image_base64 || item.data_url || item.url || item.image_url || item.image_url?.url || null;
+  if (!result) return null;
+  return {
+    ...item,
+    id: item.id || event?.item_id || event?.output_item_id || event?.call_id || event?.id || "",
+    type: "image_generation_call",
+    result,
+    output_format: item.output_format || item.format || event?.output_format || event?.format || "",
+  };
+}
+
+function mergeResponsesOutputItems(items) {
+  const merged = [];
+  const indexByKey = new Map();
+  for (const item of items || []) {
+    if (!isResponsesOutputItem(item)) continue;
+    const key = getResponsesOutputItemMergeKey(item);
+    if (indexByKey.has(key)) {
+      const index = indexByKey.get(key);
+      merged[index] = mergeResponsesOutputItem(merged[index], item);
+      continue;
+    }
+    indexByKey.set(key, merged.length);
+    merged.push(item);
+  }
+  return merged;
+}
+
+function getResponsesOutputItemMergeKey(item) {
+  return item.id ||
+    `${item.type}:${item.result || item.b64_json || item.b64 || item.image_base64 || item.data_url || item.url || item.image_url || item.image_url?.url || JSON.stringify(item).slice(0, 160)}`;
+}
+
+function mergeResponsesOutputItem(existing, next) {
+  if (existing?.type === "image_generation_call" && next?.type === "image_generation_call") {
+    const existingHasImage = hasResponsesImageGenerationPayload(existing);
+    const nextHasImage = hasResponsesImageGenerationPayload(next);
+    if (nextHasImage) return { ...existing, ...next };
+    if (existingHasImage) return existing;
+  }
+  return { ...existing, ...next };
+}
+
+function hasResponsesImageGenerationPayload(item) {
+  const image = extractResponsesImageCallImage(item);
+  return Boolean(image.b64 || image.url);
+}
+
+function collectResponsesSseOutputText(eventsOrLines) {
+  const chunks = [];
+  const events = (eventsOrLines || []).map((entry) => {
+    if (typeof entry !== "string") return entry;
+    try {
+      return JSON.parse(entry);
+    } catch (error) {
+      return null;
+    }
+  }).filter(Boolean);
+  for (const event of events) {
+    const type = String(event?.type || "");
+    if (/output_text\.delta$/.test(type) && typeof event.delta === "string") {
+      chunks.push(event.delta);
+      continue;
+    }
+    if (/output_text\.done$/.test(type) && typeof event.text === "string" && !chunks.length) {
+      chunks.push(event.text);
+      continue;
+    }
+    if (typeof event?.output_text === "string" && !chunks.length) {
+      chunks.push(event.output_text);
+    }
+  }
+  return chunks.join("").trim();
 }
 
 function normalizeGptCutoutPlan(plan, profile) {
@@ -2723,8 +3692,9 @@ async function loadComfyWorkflow(preset) {
 }
 
 async function uploadComfyImage(settings, b64, fileName) {
+  const imageFormat = inferImageFormatFromValue(b64) || "png";
   const form = new FormData();
-  form.append("image", base64ToBlob(b64, "image/png"), fileName);
+  form.append("image", base64ToBlob(b64, mimeTypeForFormat(imageFormat)), withImageFileExtension(fileName, imageFormat));
   form.append("type", "input");
   form.append("overwrite", "true");
 
@@ -2865,8 +3835,8 @@ async function downloadComfyImage(settings, imageRef) {
 }
 
 async function createComfyMaskInputBase64(originalB64, maskB64) {
-  const original = await loadImage(`data:image/png;base64,${stripDataUrl(originalB64)}`);
-  const mask = await loadImage(`data:image/png;base64,${stripDataUrl(maskB64)}`);
+  const original = await loadImage(toDataUrl(originalB64, inferImageFormatFromValue(originalB64) || "png"));
+  const mask = await loadImage(toDataUrl(maskB64, inferImageFormatFromValue(maskB64) || "png"));
   const width = original.naturalWidth || original.width;
   const height = original.naturalHeight || original.height;
 
@@ -2928,7 +3898,7 @@ async function createEffectCutoutItem(imageB64, prompt) {
 async function createEffectCutoutBase64(imageB64, prompt) {
   setProgress(60, true);
   setStatus("正在读取像素...");
-  const source = await loadImage(`data:image/png;base64,${stripDataUrl(imageB64)}`);
+  const source = await loadImage(toDataUrl(imageB64, inferImageFormatFromValue(imageB64) || "png"));
   const width = source.naturalWidth || source.width;
   const height = source.naturalHeight || source.height;
   const canvas = document.createElement("canvas");
@@ -3089,13 +4059,13 @@ async function compositeItemsWithOriginalMask(items, originalB64, maskB64) {
 async function createInpaintCompositeImages(generatedB64, originalB64, maskB64) {
   setStatus("正在载入返回图(1/3 原图)...");
   await yieldToUi();
-  const original = await loadImage(`data:image/png;base64,${stripDataUrl(originalB64)}`);
+  const original = await loadImage(toDataUrl(originalB64, inferImageFormatFromValue(originalB64) || "png"));
   setStatus("正在载入返回图(2/3 模型输出)...");
   await yieldToUi();
-  const generated = await loadImage(`data:image/png;base64,${stripDataUrl(generatedB64)}`);
+  const generated = await loadImage(toDataUrl(generatedB64, inferImageFormatFromValue(generatedB64) || "png"));
   setStatus("正在载入返回图(3/3 蒙版)...");
   await yieldToUi();
-  const mask = await loadImage(`data:image/png;base64,${stripDataUrl(maskB64)}`);
+  const mask = await loadImage(toDataUrl(maskB64, inferImageFormatFromValue(maskB64) || "png"));
   const width = original.naturalWidth || original.width;
   const height = original.naturalHeight || original.height;
 
@@ -3163,7 +4133,7 @@ async function createRectClippedImportBase64(imageB64, clipRect, placementRect) 
     decoded = await decodePngRgbaBase64(imageB64);
   } catch (error) {
     console.warn("[inpaint] direct PNG decode failed; trying UXP image decode", error);
-    const source = await loadImage(`data:image/png;base64,${stripDataUrl(imageB64)}`);
+    const source = await loadImage(toDataUrl(imageB64, inferImageFormatFromValue(imageB64) || "png"));
     const width = Math.max(1, Math.round(source.naturalWidth || source.width || 1));
     const height = Math.max(1, Math.round(source.naturalHeight || source.height || 1));
     const canvas = document.createElement("canvas");
@@ -3516,13 +4486,60 @@ async function parseOpenAIImageResponse(response, context = {}) {
     throw new Error(formatOpenAIResponseError(response, formatOpenAIError(json, response.statusText), context));
   }
 
-  const data = json.data || [];
-  setStatus(`已解析 ${data.length} 张返回图，正在准备预览...`);
-  return data.map((item) => ({
-    b64: item.b64_json || item.b64 || null,
-    url: item.url || null,
-    format: item.output_format || item.format || null,
-  }));
+  const data = Array.isArray(json.data) ? json.data : [];
+  const items = data
+    .map((item) => extractOpenAIImageDataItem(item, context.format || "png"))
+    .filter((item) => item.b64 || item.url);
+  if (!items.length) {
+    throw new Error(`${context.kind || "图片请求"}成功，但响应里没有可显示的图片数据`);
+  }
+  setStatus(`已解析 ${items.length} 张返回图，正在准备预览...`);
+  return items;
+}
+
+function extractOpenAIImageDataItem(item, fallbackFormat = "png") {
+  const candidates = [];
+  const addCandidate = (value, format = null) => candidates.push({ value, format });
+  const itemFormat = item?.output_format || item?.format || item?.mime_type || null;
+  addCandidate(item?.b64_json, itemFormat);
+  addCandidate(item?.b64, itemFormat);
+  addCandidate(item?.image_base64, itemFormat);
+  addCandidate(item?.image, itemFormat);
+  addCandidate(item?.data_url, itemFormat);
+  addCandidate(item?.url, itemFormat);
+  addCandidate(item?.image_url, itemFormat);
+  addCandidate(item?.image_url?.url, itemFormat);
+
+  if (item?.result && typeof item.result === "object") {
+    const resultFormat = item.result.output_format || item.result.format || item.result.mime_type || itemFormat;
+    addCandidate(item.result.b64_json, resultFormat);
+    addCandidate(item.result.b64, resultFormat);
+    addCandidate(item.result.image_base64, resultFormat);
+    addCandidate(item.result.image, resultFormat);
+    addCandidate(item.result.data_url, resultFormat);
+    addCandidate(item.result.url, resultFormat);
+    addCandidate(item.result.image_url, resultFormat);
+    addCandidate(item.result.image_url?.url, resultFormat);
+  } else {
+    addCandidate(item?.result, itemFormat);
+  }
+
+  for (const candidate of candidates) {
+    if (typeof candidate.value !== "string" || !candidate.value.trim()) continue;
+    const value = candidate.value.trim();
+    const format = normalizeImageOutputFormat(
+      inferImageFormatFromValue(value) ||
+      candidate.format ||
+      fallbackFormat ||
+      "png"
+    );
+    if (/^https?:\/\//i.test(value)) {
+      return { url: value, format };
+    }
+    return { b64: value, format };
+  }
+
+  return {};
 }
 
 function formatOpenAIError(json, fallback = "Request failed") {
@@ -3547,7 +4564,7 @@ function formatOpenAIResponseError(response, detail, context = {}) {
   const kind = context.kind || "图片请求";
 
   if (response.status === 404 && /\/images\/edits$/i.test(path)) {
-    return `${base}。${kind}需要图片编辑接口 ${path}，文生图可用不等于选区重绘可用；请把 Base URL 指向支持 OpenAI /v1/images/edits 的服务，或在设置里改成该服务真实的编辑路径。`;
+    return `${base}。${kind}需要图片编辑接口 ${path}；选区重绘会走 /responses 普通上传截图，不依赖 /images/edits mask 上传。请把 Base URL 指向支持该编辑接口的服务，或在设置里改成该服务真实的编辑路径。`;
   }
 
   if (response.status === 404 && /\/images\/generations$/i.test(path)) {
@@ -3823,7 +4840,11 @@ async function exportDocumentRegionAsBase64(rect, outputSize) {
 
   await core.executeAsModal(async () => {
     const sourceDoc = app.activeDocument;
-    duplicateDoc = await sourceDoc.duplicate("OpenAI inpaint region", false);
+    // Selection repaint needs the same context the user sees in Photoshop.
+    // `duplicate(..., true)` makes a merged visible-document copy; using an
+    // unmerged duplicate can export only the active layer, which leaves the
+    // model without nearby objects and makes edits drift semantically.
+    duplicateDoc = await sourceDoc.duplicate("OpenAI inpaint region", true);
     try {
       try {
         await duplicateDoc.flatten();
@@ -3857,10 +4878,11 @@ async function splitGeneratedImageIntoElementItems(sourceItem, docSize) {
 
   let source;
   try {
-    source = await imageItemToRgba(sourceItem, docSize);
+    source = await imageItemToCanvasRgba(sourceItem, docSize, "整体拆图结果");
   } catch (error) {
-    console.warn("[split] PNG pixel decode failed; placing full-canvas model output", error);
-    return [createFullCanvasSplitItem(sourceItem, docSize, "整体拆图结果", 1)];
+    if (error?.unsafeCanvasSize) throw error;
+    console.warn("[split] image decode failed; refusing unsafe full-canvas placement", error);
+    throw new Error(`拆图结果无法解码，已停止导入以避免把未透明化的整张结果放回 Photoshop：${error.message || error}`);
   }
   const { width, height, rgba } = source;
   const { mask, workingRgba } = createSplitForegroundMask(rgba, width, height);
@@ -3906,10 +4928,11 @@ async function normalizeSemanticSplitLayerItem(sourceItem, docSize, label, split
 
   let source;
   try {
-    source = await imageItemToRgba(sourceItem, docSize);
+    source = await imageItemToCanvasRgba(sourceItem, docSize, label);
   } catch (error) {
-    console.warn(`[split] PNG pixel decode failed for ${label}; placing full-canvas model output`, error);
-    return createFullCanvasSplitItem(sourceItem, docSize, label, splitIndex);
+    if (error?.unsafeCanvasSize) throw error;
+    console.warn(`[split] image decode failed for ${label}; refusing unsafe full-canvas placement`, error);
+    throw new Error(`拆图结果「${label || splitIndex || ""}」无法解码，已停止导入以避免把未透明化的整张结果放回 Photoshop：${error.message || error}`);
   }
   const { width, height, rgba } = source;
   const { mask, workingRgba } = createSplitForegroundMask(rgba, width, height);
@@ -3956,41 +4979,36 @@ async function normalizeSemanticSplitLayerItem(sourceItem, docSize, label, split
   };
 }
 
-function createFullCanvasSplitItem(sourceItem, docSize, label, splitIndex) {
-  const width = Math.max(1, Math.round(docSize?.width || 1));
-  const height = Math.max(1, Math.round(docSize?.height || 1));
-  const b64 = stripDataUrl(sourceItem.importB64 || sourceItem.b64 || "");
-  const fullRect = {
-    left: 0,
-    top: 0,
-    right: width,
-    bottom: height,
-    width,
-    height,
-  };
-  return {
-    ...sourceItem,
-    b64,
-    importB64: sourceItem.importB64 || sourceItem.b64 || null,
-    previewB64: b64,
-    previewBounds: fullRect,
-    format: sourceItem.format || "png",
-    splitIndex,
-    splitLabel: label,
-    splitBounds: fullRect,
-    targetRect: fullRect,
-    placementRect: fullRect,
-    whiteMatteMask: true,
-  };
-}
-
 async function imageItemToRgba(item, targetSize = null) {
-  const b64 = item.importB64 || item.b64;
+  let b64 = item.importB64 || item.b64;
+  let sourceFormat = resolveImageValueFormat(item, b64, "png");
+  if (!b64 && item.url) {
+    const buffer = await resultToArrayBuffer(item, true);
+    const bytes = new Uint8Array(buffer);
+    sourceFormat = resolveImageBytesFormat(item, bytes, sourceFormat);
+    b64 = arrayBufferToBase64(buffer);
+  }
   if (!b64) {
     throw new Error("拆图结果缺少图片数据");
   }
 
-  const image = await loadImage(`data:image/png;base64,${stripDataUrl(b64)}`);
+  try {
+    const decoded = await decodePngRgbaBase64(b64);
+    const width = Math.max(1, Math.round(targetSize?.width || decoded.width));
+    const height = Math.max(1, Math.round(targetSize?.height || decoded.height));
+    if (width === decoded.width && height === decoded.height) {
+      return { width, height, rgba: new Uint8Array(decoded.rgba) };
+    }
+    return {
+      width,
+      height,
+      rgba: resizeRgbaNearest(decoded.rgba, decoded.width, decoded.height, width, height),
+    };
+  } catch (error) {
+    console.warn("[png] direct PNG decode failed; falling back to UXP image loader", error);
+  }
+
+  const image = await loadImage(toDataUrl(b64, sourceFormat || "png"));
   const sourceWidth = Math.max(1, Math.round(image.width || image.naturalWidth || 1));
   const sourceHeight = Math.max(1, Math.round(image.height || image.naturalHeight || 1));
   const width = Math.max(1, Math.round(targetSize?.width || sourceWidth));
@@ -4003,6 +5021,52 @@ async function imageItemToRgba(item, targetSize = null) {
   ctx.drawImage(image, 0, 0, width, height);
   const imageData = ctx.getImageData(0, 0, width, height);
   return { width, height, rgba: new Uint8Array(imageData.data) };
+}
+
+async function imageItemToCanvasRgba(item, docSize, label) {
+  const source = await imageItemToRgba(item);
+  const targetWidth = Math.max(1, Math.round(toNumber(docSize?.width) || source.width));
+  const targetHeight = Math.max(1, Math.round(toNumber(docSize?.height) || source.height));
+  if (source.width === targetWidth && source.height === targetHeight) {
+    return source;
+  }
+
+  const sourceRatio = source.width / Math.max(1, source.height);
+  const targetRatio = targetWidth / Math.max(1, targetHeight);
+  if (Math.abs(Math.log(sourceRatio / targetRatio)) > 0.04) {
+    const error = new Error(`${label || "拆图结果"}尺寸 ${source.width}x${source.height} 与 Photoshop 画布 ${targetWidth}x${targetHeight} 比例不一致，已停止导入以避免图层被拉伸错位`);
+    error.unsafeCanvasSize = true;
+    throw error;
+  }
+
+  return {
+    width: targetWidth,
+    height: targetHeight,
+    rgba: resizeRgbaNearest(source.rgba, source.width, source.height, targetWidth, targetHeight),
+  };
+}
+
+function resizeRgbaNearest(sourceRgba, sourceWidth, sourceHeight, targetWidth, targetHeight) {
+  const output = new Uint8Array(targetWidth * targetHeight * 4);
+  for (let y = 0; y < targetHeight; y += 1) {
+    const sourceY = Math.min(sourceHeight - 1, Math.floor((y / targetHeight) * sourceHeight));
+    for (let x = 0; x < targetWidth; x += 1) {
+      const sourceX = Math.min(sourceWidth - 1, Math.floor((x / targetWidth) * sourceWidth));
+      const sourceOffset = (sourceY * sourceWidth + sourceX) * 4;
+      const outputOffset = (y * targetWidth + x) * 4;
+      output[outputOffset] = sourceRgba[sourceOffset];
+      output[outputOffset + 1] = sourceRgba[sourceOffset + 1];
+      output[outputOffset + 2] = sourceRgba[sourceOffset + 2];
+      output[outputOffset + 3] = sourceRgba[sourceOffset + 3];
+    }
+  }
+  return output;
+}
+
+async function createWhiteMatteTransparentBase64(item) {
+  const { width, height, rgba } = await imageItemToRgba(item);
+  const { workingRgba } = createSplitForegroundMask(rgba, width, height);
+  return bytesToBase64(encodePngRgba(width, height, workingRgba));
 }
 
 function createSplitForegroundMask(sourceRgba, width, height) {
@@ -4290,6 +5354,18 @@ async function importSelected() {
       : "OpenAI Image";
     let itemToPlace = item;
     let cropRectToPlace = cropRect;
+    if (shouldNormalizeCapturedPlacementItem(itemToPlace, placementRect)) {
+      setStatus("正在校正历史结果尺寸，确保按原 Photoshop 区域放回...");
+      const normalized = await normalizePlacementSizedResultItem(
+        itemToPlace,
+        {
+          width: Math.max(1, Math.round(toNumber(placementRect.width) || 1)),
+          height: Math.max(1, Math.round(toNumber(placementRect.height) || 1)),
+        },
+        getPlacementResultLabel(itemToPlace)
+      );
+      itemToPlace = normalized.item;
+    }
     if (isMaskedInpaintLayerResult(item) && !item.preclippedImport && isSelectionValid(cropRect) && isSelectionValid(placementRect)) {
       setStatus("正在准备选区保护透明图层...");
       const clippedImport = await createRectClippedImportBase64(item.importB64 || item.b64, cropRect, placementRect);
@@ -4305,8 +5381,9 @@ async function importSelected() {
     if (item.mode === "outpaint") {
       await expandCanvasForOutpaint(item.outpaintPadding, item.targetRect || item.placementRect, item.outpaintBaseSize);
     }
+    const directSelectionPatch = isDirectSelectionPatchResult(itemToPlace);
     await placeResultAsLayer(itemToPlace, placementRect, layerName, needsPostImportMask ? cropRectToPlace : null, {
-      fitByImageSize: isMaskedInpaintLayerResult(itemToPlace),
+      fitByImageSize: isMaskedInpaintLayerResult(itemToPlace) || directSelectionPatch,
       alignVisibleRect: isMaskedInpaintLayerResult(itemToPlace),
       preserveImageAspect: item.mode === "cutout" || item.mode === "outpaint" || isSplitElement || item.placementMode === "full-region-patch",
       rasterizeBeforeMask: needsPostImportMask,
@@ -4330,16 +5407,69 @@ function isCapturedRegionResult(item) {
     (isSelectionValid(item.placementRect) || isSelectionValid(item.targetRect));
 }
 
+function shouldNormalizeCapturedPlacementItem(item, placementRect) {
+  if (!item || !isSelectionValid(placementRect)) return false;
+  if (isDirectSelectionPatchResult(item) || isMaskedInpaintLayerResult(item)) return false;
+  if (item.placementMode === "full-region-patch") return true;
+  return item.mode === "cutout" || item.mode === "outpaint" || item.mode === "split";
+}
+
+function getPlacementResultLabel(item) {
+  if (item?.mode === "cutout") return "抠图结果";
+  if (item?.mode === "outpaint") return "扩图结果";
+  if (item?.mode === "split") return "拆图结果";
+  if (item?.mode === "reference") return "参考图结果";
+  return "历史结果";
+}
+
 function buildSplitLayerName(item, fallbackIndex) {
   const index = item?.splitIndex || fallbackIndex || "";
   const label = String(item?.splitLabel || "").trim();
   return label ? `Split ${index} ${label}` : `Split Element ${index}`.trim();
 }
 
+function assertDirectSelectionPatchPlacementRatio(item, imageSize, placementRect) {
+  if (!isDirectSelectionPatchResult(item) || !isSelectionValid(placementRect)) return;
+  const imageWidth = Math.max(1, Math.round(toNumber(imageSize?.width) || 1));
+  const imageHeight = Math.max(1, Math.round(toNumber(imageSize?.height) || 1));
+  const placementWidth = Math.max(1, Math.round(toNumber(placementRect.width) || 1));
+  const placementHeight = Math.max(1, Math.round(toNumber(placementRect.height) || 1));
+  const imageRatio = imageWidth / Math.max(1, imageHeight);
+  const placementRatio = placementWidth / Math.max(1, placementHeight);
+  if (Math.abs(Math.log(imageRatio / placementRatio)) <= 0.08) return;
+  throw new Error(`选区重绘结果尺寸 ${imageWidth}x${imageHeight} 与原选区 ${placementWidth}x${placementHeight} 比例不一致，已停止导入以避免拉伸变形`);
+}
+
 async function placeResultAsLayer(item, selectionInfo, layerName, cropRect = null, opts = {}) {
-  const binary = await resultToArrayBuffer(item, true);
-  const format = item.format || detectFormatFromResult(item) || "png";
-  const imageSize = getValidatedImageSize(binary, format);
+  let itemToImport = item;
+  if (item?.whiteMatteMask || opts.removeWhiteMatte) {
+    try {
+      const transparentB64 = await createWhiteMatteTransparentBase64(item);
+      itemToImport = {
+        ...item,
+        b64: transparentB64,
+        importB64: transparentB64,
+        format: "png",
+        whiteMatteMask: false,
+      };
+    } catch (error) {
+      console.warn("[split] JS white matte removal failed; refusing unsafe white-matte placement", error);
+      throw new Error(`拆图白底透明化失败，已停止导入以避免把白底整层放入 Photoshop：${error.message || error}`);
+    }
+  }
+
+  const binary = await resultToArrayBuffer(itemToImport, true);
+  let format = detectFormatFromResult(itemToImport) || "png";
+  let imageSize = null;
+  try {
+    imageSize = getValidatedImageSize(binary, format);
+  } catch (error) {
+    const inferred = inferImageFormatFromBytes(new Uint8Array(binary));
+    if (!inferred || inferred === format) throw error;
+    format = inferred;
+    imageSize = getValidatedImageSize(binary, format);
+  }
+  assertDirectSelectionPatchPlacementRatio(itemToImport, imageSize, selectionInfo);
 
   if (!app.activeDocument) {
     await core.executeAsModal(async () => {
@@ -4390,8 +5520,8 @@ async function placeResultAsLayer(item, selectionInfo, layerName, cropRect = nul
 
   if (isSelectionValid(selectionInfo) && importedLayer) {
     if (opts.fitByImageSize) {
-      if (opts.alignVisibleRect && isSelectionValid(item.importVisibleRect) && shouldAlignByVisibleBounds(importedLayer, imageSize, item.importVisibleRect)) {
-        await transformLayerToRect(importedLayer, item.importVisibleRect);
+      if (opts.alignVisibleRect && isSelectionValid(itemToImport.importVisibleRect) && shouldAlignByVisibleBounds(importedLayer, imageSize, itemToImport.importVisibleRect)) {
+        await transformLayerToRect(importedLayer, itemToImport.importVisibleRect);
       } else {
         await transformLayerByImageRect(importedLayer, imageSize, selectionInfo);
       }
@@ -4464,11 +5594,7 @@ async function placeResultAsLayer(item, selectionInfo, layerName, cropRect = nul
   }
 
   if ((opts.removeWhiteMatte || item.whiteMatteMask) && importedLayer) {
-    try {
-      await applyWhiteMatteMaskToLayer(importedLayer);
-    } catch (error) {
-      console.warn("[split] white matte mask failed", error);
-    }
+    console.log("[split] white matte removed in JS before placement");
   }
 }
 
@@ -4638,7 +5764,7 @@ async function prepareMaskedInpaintLayers(items, inpaint) {
   let index = 0;
   for (const item of items || []) {
     index += 1;
-    setStatus(`正在准备选区保护图层 ${index}/${total}...`);
+    setStatus(`正在准备选区裁切导入图层 ${index}/${total}...`);
     const sourceImportB64 = item?.importB64 || item?.b64 || null;
     const canPreclipImport = Boolean(sourceImportB64 && isSelectionValid(inpaint.targetRect) && isSelectionValid(inpaint.placementRect));
     let importB64 = sourceImportB64;
@@ -4674,9 +5800,26 @@ function isMaskedInpaintLayerResult(item) {
   return item?.mode === "inpaint" && item?.placementMode === "selection-mask-layer";
 }
 
+function isDirectSelectionPatchResult(item) {
+  return item?.mode === "inpaint" && item?.placementMode === "direct-selection-patch";
+}
+
 async function transformLayerByImageRect(layer, imageSize, targetRect) {
   const sourceWidth = Math.max(1, Number(imageSize?.width) || 1);
   const sourceHeight = Math.max(1, Number(imageSize?.height) || 1);
+  const bounds = normalizeBounds(layer?.boundsNoEffects || layer?.bounds);
+  if (bounds && bounds.width > 0 && bounds.height > 0) {
+    const widthTolerance = Math.max(2, sourceWidth * 0.04);
+    const heightTolerance = Math.max(2, sourceHeight * 0.04);
+    const boundsCoverFullImage =
+      Math.abs(bounds.width - sourceWidth) <= widthTolerance &&
+      Math.abs(bounds.height - sourceHeight) <= heightTolerance;
+    if (boundsCoverFullImage) {
+      await transformLayerToRect(layer, targetRect);
+      return;
+    }
+  }
+
   const docSize = getDocumentSize();
   const currentLeft = docSize.width / 2 - sourceWidth / 2;
   const currentTop = docSize.height / 2 - sourceHeight / 2;
@@ -4804,31 +5947,121 @@ async function resultToArrayBuffer(item, preferImport = false) {
 }
 
 function resultToPreviewSrc(item) {
-  if (item.url) return item.url;
-  if (item.previewUrl) return item.previewUrl;
   if (item.previewB64) {
-    return toDataUrl(item.previewB64, "png");
+    return toDataUrl(item.previewB64, inferImageFormatFromValue(item.previewB64) || "png");
   }
-  if (item.b64) {
-    const format = item.format || "png";
+  const sourceB64 = item.importB64 || item.b64 || "";
+  if (sourceB64) {
+    const format = inferImageFormatFromValue(sourceB64) || detectFormatFromResult(item);
+    const sourceKey = `${format}:${sourceB64.length}:${sourceB64.slice(0, 24)}:${sourceB64.slice(-24)}`;
+    if (item.previewUrl && item.previewUrlKey === sourceKey) {
+      return item.previewUrl;
+    }
+    resetResultPreviewCache(item);
     try {
       if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
-        item.previewUrl = URL.createObjectURL(base64ToBlob(item.b64, mimeTypeForFormat(format)));
+        item.previewUrl = URL.createObjectURL(base64ToBlob(sourceB64, mimeTypeForFormat(format)));
+        item.previewUrlKey = sourceKey;
         return item.previewUrl;
       }
     } catch (error) {
       console.warn("Blob preview failed, falling back to data URL", error);
     }
-    return toDataUrl(item.b64, format);
+    return toDataUrl(sourceB64, format);
   }
+  if (item.previewUrl) return item.previewUrl;
+  if (item.url) return item.url;
   return "";
 }
 
+function resetResultPreviewCache(item, options = {}) {
+  if (!item) return;
+  if (item.previewUrl && typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
+    try {
+      URL.revokeObjectURL(item.previewUrl);
+    } catch (error) {
+      console.warn("Preview URL revoke failed", error);
+    }
+  }
+  item.previewUrl = null;
+  item.previewUrlKey = null;
+  if (options.dropCroppedPreview) {
+    item.previewB64 = null;
+    item.previewBounds = null;
+  }
+}
+
 function detectFormatFromResult(item) {
-  if (item.format) return item.format;
-  if (item.url && item.url.includes(".webp")) return "webp";
-  if (item.url && (item.url.includes(".jpg") || item.url.includes(".jpeg"))) return "jpeg";
+  const inferred = inferImageFormatFromValue(item.importB64 || item.b64 || item.url || "");
+  if (inferred) return inferred;
+  if (item.format) return normalizeImageOutputFormat(item.format);
   return "png";
+}
+
+function resolveImageValueFormat(item, value, fallbackFormat = "png") {
+  const valueFormat = inferImageFormatFromValue(value);
+  if (valueFormat) return valueFormat;
+  if (item?.format) return normalizeImageOutputFormat(item.format);
+  return normalizeImageOutputFormat(fallbackFormat || "png");
+}
+
+function resolveImageBytesFormat(item, bytes, fallbackFormat = "png") {
+  const byteFormat = inferImageFormatFromBytes(bytes);
+  if (byteFormat) return byteFormat;
+  const valueFormat = inferImageFormatFromValue(item?.importB64 || item?.b64 || item?.url || "");
+  if (valueFormat) return valueFormat;
+  if (item?.format) return normalizeImageOutputFormat(item.format);
+  return normalizeImageOutputFormat(fallbackFormat || "png");
+}
+
+function inferImageFormatFromValue(value) {
+  const raw = String(value || "").trim();
+  const text = raw.toLowerCase();
+  if (!raw) return "";
+  const dataMatch = raw.match(/^data:image\/([a-z0-9.+-]+);base64,(.*)$/i);
+  if (dataMatch) {
+    return inferImageFormatFromBase64(dataMatch[2]) || normalizeImageOutputFormat(dataMatch[1]);
+  }
+  const path = text.split(/[?#]/)[0];
+  if (path.endsWith(".webp")) return "webp";
+  if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "jpeg";
+  if (path.endsWith(".png")) return "png";
+  const byBytes = inferImageFormatFromBase64(raw);
+  if (byBytes) return byBytes;
+  return "";
+}
+
+function inferImageFormatFromBase64(value) {
+  const b64 = stripDataUrl(value).replace(/\s/g, "");
+  if (!b64 || b64.length < 12 || !/^[a-zA-Z0-9+/]+={0,2}$/.test(b64)) return "";
+  try {
+    return inferImageFormatFromBytes(new Uint8Array(base64ToArrayBuffer(b64)));
+  } catch (error) {
+    return "";
+  }
+}
+
+function inferImageFormatFromBytes(bytes) {
+  if (!bytes || bytes.length < 4) return "";
+  if (
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return "png";
+  }
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "jpeg";
+  }
+  if (
+    bytes.length >= 12 &&
+    bytesToAscii(bytes, 0, 4) === "RIFF" &&
+    bytesToAscii(bytes, 8, 12) === "WEBP"
+  ) {
+    return "webp";
+  }
+  return "";
 }
 
 async function transformLayerToRect(layer, targetRect) {
@@ -4841,8 +6074,14 @@ async function transformLayerToRect(layer, targetRect) {
   await core.executeAsModal(async () => {
     await action.batchPlay([
       {
+        _obj: "select",
+        _target: [{ _id: layer.id, _ref: "layer" }],
+        makeVisible: false,
+        _options: { dialogOptions: "dontDisplay" },
+      },
+      {
         _obj: "transform",
-        _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
+        _target: [{ _id: layer.id, _ref: "layer" }],
         freeTransformCenterState: {
           _enum: "quadCenterState",
           _value: "QCSIndependent",
@@ -4864,6 +6103,15 @@ async function transformLayerToRect(layer, targetRect) {
       },
     ], { synchronousExecution: true, modalBehavior: "execute" });
   }, { commandName: "Fit OpenAI image" });
+}
+
+function rectsMatchWithinTolerance(bounds, rect, tolerance = 1) {
+  if (!bounds || !isSelectionValid(rect)) return false;
+  const maxDelta = Math.max(0, Number(tolerance) || 0);
+  return Math.abs(toNumber(bounds.left) - toNumber(rect.left)) <= maxDelta &&
+    Math.abs(toNumber(bounds.top) - toNumber(rect.top)) <= maxDelta &&
+    Math.abs(toNumber(bounds.right) - toNumber(rect.right)) <= maxDelta &&
+    Math.abs(toNumber(bounds.bottom) - toNumber(rect.bottom)) <= maxDelta;
 }
 
 async function selectFrontLayerForPlacementInModal() {
@@ -5089,10 +6337,495 @@ async function createInpaintInputs(selection, docSize, model) {
   };
 }
 
+async function createInpaintScreenshotInputs(selection, docSize, model) {
+  const targetRect = clampRectToDocument(cloneRect(selection), docSize);
+  setStatus(`正在导出白底截图参考图：${targetRect.width}x${targetRect.height}`);
+  const mattedImage = await matteTransparentPngBase64(
+    await exportDocumentRegionAsBase64(targetRect, null),
+    { r: 255, g: 255, b: 255 }
+  );
+  const paddedReference = await createPaddedScreenshotReferenceBase64(mattedImage);
+  const image = paddedReference.b64;
+  await saveDebugBase64Image("openai-last-inpaint-input.png", image);
+  await saveDebugJsonFile("openai-last-inpaint-input.json", {
+    pluginVersion: PLUGIN_VERSION,
+    workflow: "screenshot-reference-edit",
+    hasMask: false,
+    screenshotReferenceEdit: true,
+    uploadIsNormalImage: true,
+    whiteMatted: true,
+    imageBytes: estimateBase64Bytes(image),
+    imageFormat: inferImageFormatFromValue(image) || "png",
+    maskBytes: 0,
+    maskFormat: null,
+    apiSize: "auto",
+    displaySize: `${targetRect.width}x${targetRect.height}`,
+    targetRect,
+    placementRect: targetRect,
+    referenceCanvasSize: `${paddedReference.crop.canvasWidth}x${paddedReference.crop.canvasHeight}`,
+    sourceNonWhiteRatio: paddedReference.crop.sourceNonWhiteRatio || 0,
+    protectedBlankResultSafety: {
+      enabledWhenPromptHasPreservationConstraint: true,
+      minimumSourceNonWhiteRatio: PROTECTED_REPAINT_MIN_SOURCE_NON_WHITE_RATIO,
+      minimumResultNonWhiteRatio: PROTECTED_REPAINT_MIN_RESULT_NON_WHITE_RATIO,
+    },
+    referenceCrop: paddedReference.crop,
+    referenceCropBox: formatScreenshotReferenceCropBox(paddedReference.crop),
+  });
+
+  return {
+    image,
+    mask: null,
+    apiSize: "auto",
+    displaySize: `${targetRect.width}x${targetRect.height}`,
+    referenceCanvasSize: `${paddedReference.crop.canvasWidth}x${paddedReference.crop.canvasHeight}`,
+    targetRect,
+    placementRect: targetRect,
+    screenshotReferenceEdit: true,
+    sourceNonWhiteRatio: paddedReference.crop.sourceNonWhiteRatio || 0,
+    referenceCrop: paddedReference.crop,
+  };
+}
+
+async function cropScreenshotReferenceEditItems(items, referenceCrop, options = {}) {
+  const output = [];
+  for (const item of items || []) {
+    try {
+      const pngB64 = await normalizeImageItemToPngBase64(item);
+      const cropped = await cropPaddedScreenshotResultBase64(pngB64, referenceCrop);
+      const footprint = await normalizeScreenshotReferenceResultBase64(cropped, referenceCrop, options);
+      await assertProtectedScreenshotCropHasContent(footprint.b64, referenceCrop, options);
+      output.push({
+        ...item,
+        b64: footprint.b64,
+        importB64: footprint.b64,
+        format: "png",
+        url: null,
+        normalizedReferenceFootprint: footprint.normalized,
+      });
+    } catch (error) {
+      console.warn("[inpaint] padded screenshot result crop failed; refusing unsafe full-canvas placement", error);
+      throw new Error(`截图重绘结果无法裁回 Photoshop 选区，已停止以避免把整张未裁切图片错误放回：${error.message || error}`);
+    }
+  }
+  return output;
+}
+
+async function assertProtectedScreenshotCropHasContent(b64, referenceCrop, options = {}) {
+  if (!options.requireProtectedContent) return;
+  const sourceNonWhiteRatio = Number(referenceCrop?.sourceNonWhiteRatio || 0);
+  if (!Number.isFinite(sourceNonWhiteRatio) || sourceNonWhiteRatio < PROTECTED_REPAINT_MIN_SOURCE_NON_WHITE_RATIO) return;
+  let decoded = null;
+  try {
+    decoded = await decodePngRgbaBase64(b64);
+  } catch (error) {
+    return;
+  }
+  const resultNonWhiteRatio = estimateNonWhiteRgbaRatio(decoded.rgba, decoded.width, decoded.height);
+  if (resultNonWhiteRatio >= PROTECTED_REPAINT_MIN_RESULT_NON_WHITE_RATIO) return;
+  throw new Error("截图重绘结果几乎为空白，但原选区包含受保护内容，已停止导入以避免擦掉用户要求保持不变的对象");
+}
+
+function estimateNonWhiteRgbaRatio(rgba, width, height) {
+  const total = Math.max(1, Math.round(width || 1) * Math.round(height || 1));
+  if (!rgba || !rgba.length) return 0;
+  let nonWhite = 0;
+  const max = Math.min(rgba.length, total * 4);
+  for (let offset = 0; offset < max; offset += 4) {
+    if (
+      rgba[offset + 3] > 12 &&
+      (rgba[offset] < 248 || rgba[offset + 1] < 248 || rgba[offset + 2] < 248)
+    ) {
+      nonWhite += 1;
+    }
+  }
+  return nonWhite / total;
+}
+
+async function normalizeScreenshotReferenceResultBase64(b64, referenceCrop, options = {}) {
+  let decoded = null;
+  try {
+    decoded = await decodePngRgbaBase64(b64);
+  } catch (error) {
+    return { b64, normalized: false };
+  }
+
+  const targetWidth = Math.max(1, Math.round(referenceCrop?.width || decoded.width));
+  const targetHeight = Math.max(1, Math.round(referenceCrop?.height || decoded.height));
+  const sizeMismatch = decoded.width !== targetWidth || decoded.height !== targetHeight;
+
+  const resized = sizeMismatch
+    ? resizeRgbaNearest(decoded.rgba, decoded.width, decoded.height, targetWidth, targetHeight)
+    : new Uint8Array(decoded.rgba);
+  const matted = matteRgbaToWhiteOpaque(resized);
+  return {
+    b64: bytesToBase64(encodePngRgba(targetWidth, targetHeight, matted)),
+    normalized: sizeMismatch || matted !== resized,
+  };
+}
+
+function matteRgbaToWhiteOpaque(rgba) {
+  let changed = false;
+  const output = new Uint8Array(rgba.length);
+  for (let index = 0; index < rgba.length; index += 4) {
+    const alphaByte = rgba[index + 3] || 0;
+    const alpha = alphaByte / 255;
+    output[index] = Math.round((rgba[index] || 0) * alpha + 255 * (1 - alpha));
+    output[index + 1] = Math.round((rgba[index + 1] || 0) * alpha + 255 * (1 - alpha));
+    output[index + 2] = Math.round((rgba[index + 2] || 0) * alpha + 255 * (1 - alpha));
+    output[index + 3] = 255;
+    if (alphaByte !== 255 || output[index] !== rgba[index] || output[index + 1] !== rgba[index + 1] || output[index + 2] !== rgba[index + 2]) {
+      changed = true;
+    }
+  }
+  return changed ? output : rgba;
+}
+
+function findNonWhiteRgbaBounds(rgba, width, height) {
+  const imageWidth = Math.max(1, Math.round(width || 1));
+  const imageHeight = Math.max(1, Math.round(height || 1));
+  if (!rgba || !rgba.length) return null;
+  let left = imageWidth;
+  let top = imageHeight;
+  let right = 0;
+  let bottom = 0;
+  for (let y = 0; y < imageHeight; y += 1) {
+    for (let x = 0; x < imageWidth; x += 1) {
+      const offset = (y * imageWidth + x) * 4;
+      if (!isNonWhiteRgbaPixel(rgba, offset)) continue;
+      if (x < left) left = x;
+      if (y < top) top = y;
+      if (x + 1 > right) right = x + 1;
+      if (y + 1 > bottom) bottom = y + 1;
+    }
+  }
+  if (right <= left || bottom <= top) return null;
+  return { left, top, right, bottom, width: right - left, height: bottom - top };
+}
+
+function isNonWhiteRgbaPixel(rgba, offset) {
+  return rgba[offset + 3] > 12 && (rgba[offset] < 250 || rgba[offset + 1] < 250 || rgba[offset + 2] < 250);
+}
+
+async function normalizeImageItemToPngBase64(item) {
+  const sourceB64 = item?.importB64 || item?.b64 || "";
+  if (sourceB64) {
+    try {
+      await decodePngRgbaBase64(sourceB64);
+      return stripDataUrl(sourceB64);
+    } catch (error) {
+      // Continue through the browser image decoder for JPEG/WebP/data URLs.
+    }
+  }
+
+  if (!sourceB64 && item?.url) {
+    const buffer = await resultToArrayBuffer(item, true);
+    const bytes = new Uint8Array(buffer);
+    const format = resolveImageBytesFormat(item, bytes, detectFormatFromResult(item));
+    const downloadedB64 = arrayBufferToBase64(buffer);
+    if (format === "png") {
+      await decodePngRgbaBase64(downloadedB64);
+      return downloadedB64;
+    }
+    const image = await loadImage(toDataUrl(downloadedB64, format || "png"));
+    const width = Math.max(1, Math.round(image.width || image.naturalWidth || 1));
+    const height = Math.max(1, Math.round(image.height || image.naturalHeight || 1));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("当前 UXP Canvas 无法转换截图重绘 URL 结果");
+    }
+    ctx.clearRect(0, 0, width, height);
+    ctx.drawImage(image, 0, 0, width, height);
+    return canvasToBase64(canvas);
+  }
+
+  const source = sourceB64
+    ? toDataUrl(sourceB64, resolveImageValueFormat(item, sourceB64, "png"))
+    : item?.url;
+  if (!source) {
+    throw new Error("截图重绘结果缺少可裁切的图片数据");
+  }
+  const image = await loadImage(source);
+  const width = Math.max(1, Math.round(image.width || image.naturalWidth || 1));
+  const height = Math.max(1, Math.round(image.height || image.naturalHeight || 1));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("当前 UXP Canvas 无法转换截图重绘结果");
+  }
+  ctx.clearRect(0, 0, width, height);
+  ctx.drawImage(image, 0, 0, width, height);
+  return canvasToBase64(canvas);
+}
+
+async function createPaddedScreenshotReferenceBase64(b64) {
+  const decoded = await decodePngRgbaBase64(b64);
+  const sourceNonWhiteRatio = estimateNonWhiteRgbaRatio(decoded.rgba, decoded.width, decoded.height);
+  const sourceContentBounds = findNonWhiteRgbaBounds(decoded.rgba, decoded.width, decoded.height);
+  const canvas = getPaddedScreenshotReferenceCanvas(decoded.width, decoded.height);
+  const left = Math.floor((canvas.width - decoded.width) / 2);
+  const top = Math.floor((canvas.height - decoded.height) / 2);
+  if (canvas.width === decoded.width && canvas.height === decoded.height && left === 0 && top === 0) {
+    return {
+      b64,
+      crop: {
+        canvasWidth: decoded.width,
+        canvasHeight: decoded.height,
+        left: 0,
+        top: 0,
+        width: decoded.width,
+        height: decoded.height,
+        sourceNonWhiteRatio,
+        sourceContentBounds,
+      },
+    };
+  }
+
+  const output = new Uint8Array(canvas.width * canvas.height * 4);
+  for (let index = 0; index < output.length; index += 4) {
+    output[index] = 255;
+    output[index + 1] = 255;
+    output[index + 2] = 255;
+    output[index + 3] = 255;
+  }
+  blitRgba(decoded.rgba, decoded.width, decoded.height, output, canvas.width, canvas.height, left, top);
+  return {
+    b64: bytesToBase64(encodePngRgba(canvas.width, canvas.height, output)),
+    crop: {
+      canvasWidth: canvas.width,
+      canvasHeight: canvas.height,
+      left,
+      top,
+      width: decoded.width,
+      height: decoded.height,
+      sourceNonWhiteRatio,
+      sourceContentBounds,
+    },
+  };
+}
+
+function getPaddedScreenshotReferenceCanvas(width, height) {
+  const sourceWidth = Math.max(1, Math.round(width || 1));
+  const sourceHeight = Math.max(1, Math.round(height || 1));
+  return { width: sourceWidth, height: sourceHeight };
+}
+
+function formatScreenshotReferenceCropBox(crop) {
+  if (!crop) return "";
+  const left = Math.max(0, Math.round(crop.left || 0));
+  const top = Math.max(0, Math.round(crop.top || 0));
+  const width = Math.max(1, Math.round(crop.width || 1));
+  const height = Math.max(1, Math.round(crop.height || 1));
+  return `${left},${top},${width}x${height}`;
+}
+
+function blitRgba(source, sourceWidth, sourceHeight, target, targetWidth, targetHeight, left, top) {
+  for (let y = 0; y < sourceHeight; y += 1) {
+    const targetY = top + y;
+    if (targetY < 0 || targetY >= targetHeight) continue;
+    for (let x = 0; x < sourceWidth; x += 1) {
+      const targetX = left + x;
+      if (targetX < 0 || targetX >= targetWidth) continue;
+      const sourceOffset = (y * sourceWidth + x) * 4;
+      const targetOffset = (targetY * targetWidth + targetX) * 4;
+      target[targetOffset] = source[sourceOffset];
+      target[targetOffset + 1] = source[sourceOffset + 1];
+      target[targetOffset + 2] = source[sourceOffset + 2];
+      target[targetOffset + 3] = source[sourceOffset + 3];
+    }
+  }
+}
+
+async function cropPaddedScreenshotResultBase64(b64, crop) {
+  if (!crop || !crop.canvasWidth || !crop.canvasHeight || !crop.width || !crop.height) return b64;
+  const decoded = await decodePngRgbaBase64(b64);
+  if (shouldKeepScreenshotResultWithoutCrop(decoded, crop)) {
+    return b64;
+  }
+  if (isDirectScreenshotReferenceCrop(crop)) {
+    assertScreenshotCropResultMatchesSelectionRatio(decoded.width, decoded.height, crop);
+    return b64;
+  }
+  if (!shouldCropScreenshotResultAsPaddedCanvas(decoded, crop)) {
+    throw new Error(`截图重绘结果尺寸 ${decoded.width}x${decoded.height} 无法确认是原白底参考画布，已停止导入以避免错误居中裁切`);
+  }
+  const scaleX = decoded.width / crop.canvasWidth;
+  const scaleY = decoded.height / crop.canvasHeight;
+  const left = Math.max(0, Math.min(decoded.width - 1, Math.round(crop.left * scaleX)));
+  const top = Math.max(0, Math.min(decoded.height - 1, Math.round(crop.top * scaleY)));
+  const right = Math.max(left + 1, Math.min(decoded.width, Math.round((crop.left + crop.width) * scaleX)));
+  const bottom = Math.max(top + 1, Math.min(decoded.height, Math.round((crop.top + crop.height) * scaleY)));
+  const width = right - left;
+  const height = bottom - top;
+  assertScreenshotCropResultMatchesSelectionRatio(width, height, crop);
+  const output = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    const sourceOffset = ((top + y) * decoded.width + left) * 4;
+    const targetOffset = y * width * 4;
+    output.set(decoded.rgba.subarray(sourceOffset, sourceOffset + width * 4), targetOffset);
+  }
+  return bytesToBase64(encodePngRgba(width, height, output));
+}
+
+function isDirectScreenshotReferenceCrop(crop) {
+  const canvasWidth = Math.max(1, Math.round(crop?.canvasWidth || 1));
+  const canvasHeight = Math.max(1, Math.round(crop?.canvasHeight || 1));
+  const left = Math.round(crop?.left || 0);
+  const top = Math.round(crop?.top || 0);
+  const cropWidth = Math.max(1, Math.round(crop?.width || 1));
+  const cropHeight = Math.max(1, Math.round(crop?.height || 1));
+  return left === 0 && top === 0 && cropWidth === canvasWidth && cropHeight === canvasHeight;
+}
+
+function shouldCropScreenshotResultAsPaddedCanvas(decoded, crop) {
+  const width = Math.max(1, Math.round(decoded?.width || 1));
+  const height = Math.max(1, Math.round(decoded?.height || 1));
+  const canvasWidth = Math.max(1, Math.round(crop?.canvasWidth || 1));
+  const canvasHeight = Math.max(1, Math.round(crop?.canvasHeight || 1));
+  const outputRatio = width / Math.max(1, height);
+  const canvasRatio = canvasWidth / Math.max(1, canvasHeight);
+  const ratioMatchesCanvas = Math.abs(Math.log(outputRatio / canvasRatio)) < 0.08;
+  if (!ratioMatchesCanvas) return false;
+  if (isSameGeometryScreenshotCanvas(width, height, crop)) return true;
+  return looksLikePaddedScreenshotCanvas(decoded, crop);
+}
+
+function isSameGeometryScreenshotCanvas(width, height, crop) {
+  const canvasWidth = Math.max(1, Math.round(crop?.canvasWidth || 1));
+  const canvasHeight = Math.max(1, Math.round(crop?.canvasHeight || 1));
+  const cropWidth = Math.max(1, Math.round(crop?.width || 1));
+  const cropHeight = Math.max(1, Math.round(crop?.height || 1));
+  const cropAreaRatio = (cropWidth * cropHeight) / Math.max(1, canvasWidth * canvasHeight);
+  if (cropAreaRatio < 0.2) return false;
+  const scaleX = Math.max(1, Math.round(width || 1)) / canvasWidth;
+  const scaleY = Math.max(1, Math.round(height || 1)) / canvasHeight;
+  if (Math.abs(Math.log(scaleX / scaleY)) > 0.025) return false;
+  const scale = (scaleX + scaleY) / 2;
+  return scale >= 0.25 && scale <= 8;
+}
+
+function assertScreenshotCropResultMatchesSelectionRatio(width, height, crop) {
+  const cropWidth = Math.max(1, Math.round(crop?.width || 1));
+  const cropHeight = Math.max(1, Math.round(crop?.height || 1));
+  const resultWidth = Math.max(1, Math.round(width || 1));
+  const resultHeight = Math.max(1, Math.round(height || 1));
+  const cropRatio = cropWidth / Math.max(1, cropHeight);
+  const resultRatio = resultWidth / Math.max(1, resultHeight);
+  if (Math.abs(Math.log(resultRatio / cropRatio)) <= 0.08) return;
+  throw new Error(`截图重绘结果尺寸 ${resultWidth}x${resultHeight} 与原选区 ${cropWidth}x${cropHeight} 比例不一致，已停止导入以避免拉伸变形`);
+}
+
+function shouldKeepScreenshotResultWithoutCrop(decoded, crop) {
+  const width = Math.max(1, Math.round(decoded?.width || 1));
+  const height = Math.max(1, Math.round(decoded?.height || 1));
+  const cropWidth = Math.max(1, Math.round(crop?.width || 1));
+  const cropHeight = Math.max(1, Math.round(crop?.height || 1));
+  const canvasWidth = Math.max(1, Math.round(crop?.canvasWidth || 1));
+  const canvasHeight = Math.max(1, Math.round(crop?.canvasHeight || 1));
+  if (width === cropWidth && height === cropHeight) return true;
+
+  const outputLooksLikeCanvas = width >= canvasWidth * 0.82 && height >= canvasHeight * 0.82;
+  const cropRatio = cropWidth / Math.max(1, cropHeight);
+  const outputRatio = width / Math.max(1, height);
+  const canvasRatio = canvasWidth / Math.max(1, canvasHeight);
+  const ratioMatchesCrop = Math.abs(Math.log(outputRatio / cropRatio)) < 0.08;
+  const ratioMatchesCanvas = Math.abs(Math.log(outputRatio / canvasRatio)) < 0.08;
+  if (outputLooksLikeCanvas && ratioMatchesCanvas) {
+    const outputSameAsCanvas =
+      Math.abs(Math.log(width / canvasWidth)) < 0.03 &&
+      Math.abs(Math.log(height / canvasHeight)) < 0.03;
+    if (outputSameAsCanvas || looksLikePaddedScreenshotCanvas(decoded, crop)) return false;
+    if (ratioMatchesCrop) return true;
+  }
+  if (ratioMatchesCrop && (!outputLooksLikeCanvas || !ratioMatchesCanvas)) return true;
+  if (outputLooksLikeCanvas) return false;
+  return ratioMatchesCrop;
+}
+
+function looksLikePaddedScreenshotCanvas(decoded, crop) {
+  const width = Math.max(1, Math.round(decoded?.width || 1));
+  const height = Math.max(1, Math.round(decoded?.height || 1));
+  const rgba = decoded?.rgba;
+  if (!rgba || !width || !height) return false;
+
+  const scaleX = width / Math.max(1, Math.round(crop?.canvasWidth || 1));
+  const scaleY = height / Math.max(1, Math.round(crop?.canvasHeight || 1));
+  const cropLeft = Math.max(0, Math.min(width, Math.round((crop?.left || 0) * scaleX)));
+  const cropTop = Math.max(0, Math.min(height, Math.round((crop?.top || 0) * scaleY)));
+  const cropRight = Math.max(cropLeft, Math.min(width, Math.round(((crop?.left || 0) + (crop?.width || 0)) * scaleX)));
+  const cropBottom = Math.max(cropTop, Math.min(height, Math.round(((crop?.top || 0) + (crop?.height || 0)) * scaleY)));
+  const cropArea = Math.max(0, cropRight - cropLeft) * Math.max(0, cropBottom - cropTop);
+  const totalArea = width * height;
+  const outsideArea = Math.max(0, totalArea - cropArea);
+  if (!outsideArea || cropArea / totalArea > 0.88) return false;
+
+  let sampled = 0;
+  let white = 0;
+  const step = Math.max(1, Math.floor(Math.sqrt(totalArea / 4096)));
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      if (x >= cropLeft && x < cropRight && y >= cropTop && y < cropBottom) continue;
+      const offset = (y * width + x) * 4;
+      sampled += 1;
+      if (
+        rgba[offset] >= 245 &&
+        rgba[offset + 1] >= 245 &&
+        rgba[offset + 2] >= 245 &&
+        rgba[offset + 3] >= 245
+      ) {
+        white += 1;
+      }
+    }
+  }
+  return sampled > 0 && white / sampled > 0.985;
+}
+
+async function matteTransparentPngBase64(b64, matte = { r: 255, g: 255, b: 255 }) {
+  try {
+    const decoded = await decodePngRgbaBase64(b64);
+    const { width, height, rgba } = decoded;
+    let hasTransparency = false;
+    for (let index = 3; index < rgba.length; index += 4) {
+      if (rgba[index] < 255) {
+        hasTransparency = true;
+        break;
+      }
+    }
+    if (!hasTransparency) return b64;
+
+    const output = new Uint8Array(rgba.length);
+    const matteR = clampByte(matte.r, 255);
+    const matteG = clampByte(matte.g, 255);
+    const matteB = clampByte(matte.b, 255);
+    for (let index = 0; index < rgba.length; index += 4) {
+      const alpha = rgba[index + 3] / 255;
+      output[index] = Math.round((rgba[index] * alpha) + (matteR * (1 - alpha)));
+      output[index + 1] = Math.round((rgba[index + 1] * alpha) + (matteG * (1 - alpha)));
+      output[index + 2] = Math.round((rgba[index + 2] * alpha) + (matteB * (1 - alpha)));
+      output[index + 3] = 255;
+    }
+    return bytesToBase64(encodePngRgba(width, height, output));
+  } catch (error) {
+    console.warn("[inpaint] white matte PNG conversion failed; using exported screenshot", error);
+    return b64;
+  }
+}
+
+function clampByte(value, fallback = 0) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, Math.min(255, Math.round(number)));
+}
+
 async function resolveSemanticInpaintSelection(settings, prompt, selection, docSize) {
   if (shouldPreserveUserInpaintSelection(settings)) {
     console.log("[inpaint] preserving user selection for sidecar/OpenAI-compatible image edit", JSON.stringify(selection));
-    setStatus("使用你画的完整选区作为重绘 Mask");
+    setStatus("保留你画的完整选区作为截图重绘范围");
     return selection;
   }
 
@@ -5436,7 +7169,7 @@ async function requestSemanticInpaintTargetPlan(settings, prompt, imageB64) {
           },
           {
             type: "input_image",
-            image_url: `data:image/png;base64,${stripDataUrl(imageB64)}`,
+            image_url: toDataUrl(imageB64, inferImageFormatFromValue(imageB64) || "png"),
             detail: "low",
           },
         ],
@@ -5465,16 +7198,7 @@ async function requestSemanticInpaintTargetPlan(settings, prompt, imageB64) {
 }
 
 function parseJsonFromResponseOutput(json) {
-  if (json?.output_text) {
-    try {
-      return JSON.parse(json.output_text);
-    } catch (error) {
-      return null;
-    }
-  }
-
-  const message = (json?.output || []).find((item) => item?.type === "message");
-  const text = (message?.content || []).find((item) => item?.type === "output_text")?.text;
+  const text = extractResponsesOutputText(json);
   if (!text) return null;
   try {
     return JSON.parse(text);
@@ -5513,9 +7237,12 @@ function rectFromSemanticInpaintPlan(plan, prompt, selection, docSize) {
 
 async function createReferenceRegionInputs(selection, docSize, model) {
   const targetRect = clampRectToDocument(cloneRect(selection), docSize);
-  const placementRect = getInpaintPlacementRect(targetRect, docSize, model);
+  const placementRect = cloneRect(targetRect);
   const apiSize = getImageEditSizeForSelection(placementRect.width, placementRect.height, model);
-  const image = await exportDocumentRegionAsBase64(placementRect, null);
+  const image = await matteTransparentPngBase64(
+    await exportDocumentRegionAsBase64(placementRect, null),
+    { r: 255, g: 255, b: 255 }
+  );
   await saveDebugBase64Image("openai-last-reference-region.png", image);
 
   return {
@@ -5947,6 +7674,76 @@ async function createOutpaintInputs(imageB64, docSize, padding) {
   };
 }
 
+async function normalizeOutpaintResultItems(items, outpaint) {
+  const targetSize = {
+    width: Math.max(1, Math.round(toNumber(outpaint?.targetRect?.width) || 1)),
+    height: Math.max(1, Math.round(toNumber(outpaint?.targetRect?.height) || 1)),
+  };
+  const normalized = [];
+  for (const item of items || []) {
+    normalized.push(await normalizeOutpaintResultItem(item, targetSize));
+  }
+  return normalized;
+}
+
+async function normalizeOutpaintResultItem(item, targetSize) {
+  const normalized = await normalizePlacementSizedResultItem(item, targetSize, "扩图结果");
+  return normalized.item;
+}
+
+async function normalizeReferenceRegionResultItems(items, reference) {
+  const targetSize = {
+    width: Math.max(1, Math.round(toNumber(reference?.placementRect?.width) || 1)),
+    height: Math.max(1, Math.round(toNumber(reference?.placementRect?.height) || 1)),
+  };
+  const normalized = [];
+  for (const item of items || []) {
+    const result = await normalizePlacementSizedResultItem(item, targetSize, "参考图选区结果");
+    normalized.push(result.item);
+  }
+  return normalized;
+}
+
+async function normalizePlacementSizedResultItem(item, targetSize, label) {
+  if (!item || !targetSize?.width || !targetSize?.height) return { item, normalized: false };
+  const binary = await resultToArrayBuffer(item, true);
+  let format = detectFormatFromResult(item);
+  let imageSize = null;
+  try {
+    imageSize = getValidatedImageSize(binary, format);
+  } catch (error) {
+    const inferred = inferImageFormatFromBytes(new Uint8Array(binary));
+    if (!inferred || inferred === format) throw error;
+    format = inferred;
+    imageSize = getValidatedImageSize(binary, format);
+  }
+
+  if (imageSize.width === targetSize.width && imageSize.height === targetSize.height) {
+    return { item, normalized: false };
+  }
+
+  const sourceRatio = imageSize.width / Math.max(1, imageSize.height);
+  const targetRatio = targetSize.width / Math.max(1, targetSize.height);
+  if (Math.abs(Math.log(sourceRatio / targetRatio)) > 0.04) {
+    throw new Error(`${label || "结果"}尺寸 ${imageSize.width}x${imageSize.height} 与目标区域 ${targetSize.width}x${targetSize.height} 比例不一致，已停止导入以避免错位`);
+  }
+
+  const b64 = arrayBufferToBase64(binary);
+  const decoded = await imageItemToRgba({ ...item, b64, importB64: b64, url: null, format }, targetSize);
+  const resizedB64 = bytesToBase64(encodePngRgba(targetSize.width, targetSize.height, decoded.rgba));
+  return {
+    item: {
+      ...item,
+      b64: resizedB64,
+      importB64: resizedB64,
+      url: null,
+      format: "png",
+      normalizedPlacementSize: true,
+    },
+    normalized: true,
+  };
+}
+
 async function exportOutpaintCanvasAsBase64(docSize, padding) {
   if (!app.activeDocument) {
     throw new Error("当前没有打开的 Photoshop 文档");
@@ -6215,12 +8012,32 @@ function describeItem(item) {
 
 async function saveHistoryItem(item) {
   try {
-    const binary = await resultToArrayBuffer(item);
+    const savedImportBytes = Boolean(item.importB64);
+    const previousB64 = item.b64 || "";
+    const previousImportB64 = item.importB64 || "";
+    const previousUrl = item.url || null;
+    const previousFormat = item.format || "";
+    const binary = await resultToArrayBuffer(item, true);
     const folder = await getHistoryFolder();
-    const format = detectFormatFromResult(item);
+    const format = inferImageFormatFromBytes(new Uint8Array(binary)) || detectFormatFromResult(item);
     const fileName = `${item.id}.${format}`;
     const file = await folder.createFile(fileName, { overwrite: true });
     await file.write(binary, { format: storage.formats.binary });
+    const savedB64 = arrayBufferToBase64(binary);
+    item.b64 = savedB64;
+    item.url = null;
+    item.format = format;
+    if (savedImportBytes) {
+      item.importB64 = savedB64;
+    }
+    const materializedCurrentResult =
+      Boolean(previousUrl) ||
+      previousB64 !== item.b64 ||
+      previousImportB64 !== (item.importB64 || "") ||
+      normalizeImageOutputFormat(previousFormat || format) !== format;
+    if (materializedCurrentResult) {
+      resetResultPreviewCache(item, { dropCroppedPreview: true });
+    }
 
     const record = {
       id: item.id,
@@ -6231,23 +8048,31 @@ async function saveHistoryItem(item) {
       size: item.size,
       quality: item.quality,
       format,
+      placementMode: item.placementMode || null,
+      skipPreviewCrop: Boolean(item.skipPreviewCrop),
+      savedImportBytes,
       targetRect: item.targetRect || null,
       placementRect: item.placementRect || null,
       cropRect: item.cropRect || null,
+      importVisibleRect: item.importVisibleRect || null,
       outpaintPadding: item.outpaintPadding || null,
       outpaintBaseSize: item.outpaintBaseSize || null,
+      normalizedPlacementSize: Boolean(item.normalizedPlacementSize),
       splitIndex: item.splitIndex || null,
       splitLabel: item.splitLabel || null,
       splitBounds: item.splitBounds || null,
       whiteMatteMask: Boolean(item.whiteMatteMask),
+      preclippedImport: Boolean(item.preclippedImport),
       previewB64: item.previewB64 || null,
       previewBounds: item.previewBounds || null,
       createdAt: item.createdAt,
     };
     const index = readJsonLocal(HISTORY_KEY, []);
     localStorage.setItem(HISTORY_KEY, JSON.stringify([record, ...index].slice(0, 40)));
+    return materializedCurrentResult;
   } catch (error) {
     console.warn("saveHistoryItem failed", error);
+    return false;
   }
 }
 
@@ -6261,9 +8086,18 @@ async function loadHistory() {
       try {
         const file = await folder.getEntry(record.fileName);
         const buffer = await file.read({ format: storage.formats.binary });
+        const b64 = arrayBufferToBase64(buffer);
+        const format = inferImageFormatFromBytes(new Uint8Array(buffer)) || normalizeImageOutputFormat(record.format || "png");
         loaded.push({
           ...record,
-          b64: arrayBufferToBase64(buffer),
+          b64,
+          importB64: record.savedImportBytes ? b64 : null,
+          format,
+          placementMode: record.placementMode || null,
+          skipPreviewCrop: Boolean(record.skipPreviewCrop),
+          importVisibleRect: record.importVisibleRect || null,
+          normalizedPlacementSize: Boolean(record.normalizedPlacementSize),
+          preclippedImport: Boolean(record.preclippedImport),
           previewB64: record.previewB64 || null,
           previewBounds: record.previewBounds || null,
         });
@@ -6310,6 +8144,22 @@ async function saveDebugBase64Image(fileName, b64) {
     await file.write(base64ToArrayBuffer(stripDataUrl(b64)), { format: storage.formats.binary });
   } catch (error) {
     console.warn("saveDebugBase64Image failed", error);
+  }
+}
+
+async function saveDebugJsonFile(fileName, data) {
+  try {
+    const dataFolder = await fs.getDataFolder();
+    let debugFolder;
+    try {
+      debugFolder = await dataFolder.getEntry("debug");
+    } catch (error) {
+      debugFolder = await dataFolder.createFolder("debug");
+    }
+    const file = await debugFolder.createFile(fileName, { overwrite: true });
+    await file.write(JSON.stringify(data, null, 2));
+  } catch (error) {
+    console.warn("saveDebugJsonFile failed", error);
   }
 }
 
@@ -6379,11 +8229,13 @@ function throwIfCancelled() {
 
 function isCancelError(error) {
   const message = String(error?.message || error || "");
+  const normalizedMessage = message.trim();
   return Boolean(
     state.cancelRequested ||
     error?.isUserCancelled ||
     error?.name === "AbortError" ||
-    /已停止|aborted|abort|cancelled|canceled/i.test(message)
+    normalizedMessage === "已停止" ||
+    /\baborted\b|\babort\b|\bcancelled\b|\bcanceled\b/i.test(message)
   );
 }
 
@@ -6477,6 +8329,18 @@ function mimeTypeForFormat(format) {
   if (format === "jpeg" || format === "jpg") return "image/jpeg";
   if (format === "webp") return "image/webp";
   return "image/png";
+}
+
+function fileExtensionForFormat(format) {
+  const normalized = normalizeImageOutputFormat(format);
+  if (normalized === "jpeg") return "jpg";
+  return normalized;
+}
+
+function withImageFileExtension(fileName, format) {
+  const extension = fileExtensionForFormat(format);
+  const cleanName = String(fileName || "image").replace(/\.(?:png|jpe?g|webp)$/i, "");
+  return `${cleanName}.${extension}`;
 }
 
 async function canvasToBase64(canvas) {
@@ -7244,7 +9108,9 @@ function bytesToBase64(bytes) {
 }
 
 function toDataUrl(b64, format) {
-  if (String(b64).startsWith("data:")) return b64;
+  if (String(b64).startsWith("data:")) {
+    return `data:${mimeTypeForFormat(format)};base64,${stripDataUrl(b64)}`;
+  }
   return `data:${mimeTypeForFormat(format)};base64,${stripDataUrl(b64)}`;
 }
 
@@ -7277,6 +9143,106 @@ function getPngSize(buffer) {
   };
 }
 
+function getJpegSize(buffer) {
+  const bytes = new Uint8Array(buffer || new ArrayBuffer(0));
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  let offset = 2;
+  while (offset + 9 < bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    while (bytes[offset] === 0xff) offset += 1;
+    const marker = bytes[offset];
+    offset += 1;
+    if (marker === 0xd9 || marker === 0xda) break;
+    if (offset + 2 > bytes.length) break;
+    const length = (bytes[offset] << 8) | bytes[offset + 1];
+    if (length < 2 || offset + length > bytes.length) break;
+    const isSof = (marker >= 0xc0 && marker <= 0xc3) ||
+      (marker >= 0xc5 && marker <= 0xc7) ||
+      (marker >= 0xc9 && marker <= 0xcb) ||
+      (marker >= 0xcd && marker <= 0xcf);
+    if (isSof && length >= 7) {
+      return {
+        width: (bytes[offset + 5] << 8) | bytes[offset + 6],
+        height: (bytes[offset + 3] << 8) | bytes[offset + 4],
+      };
+    }
+    offset += length;
+  }
+  return null;
+}
+
+function getWebpSize(buffer) {
+  const bytes = new Uint8Array(buffer || new ArrayBuffer(0));
+  if (
+    bytes.length < 30 ||
+    bytesToAscii(bytes, 0, 4) !== "RIFF" ||
+    bytesToAscii(bytes, 8, 12) !== "WEBP"
+  ) {
+    return null;
+  }
+
+  let offset = 12;
+  while (offset + 8 <= bytes.length) {
+    const chunkType = bytesToAscii(bytes, offset, offset + 4);
+    const chunkSize = readUint32Le(bytes, offset + 4);
+    const dataOffset = offset + 8;
+    if (dataOffset + chunkSize > bytes.length) break;
+
+    if (chunkType === "VP8X" && chunkSize >= 10) {
+      const width = 1 + readUint24Le(bytes, dataOffset + 4);
+      const height = 1 + readUint24Le(bytes, dataOffset + 7);
+      return { width, height };
+    }
+
+    if (chunkType === "VP8L" && chunkSize >= 5 && bytes[dataOffset] === 0x2f) {
+      const b1 = bytes[dataOffset + 1];
+      const b2 = bytes[dataOffset + 2];
+      const b3 = bytes[dataOffset + 3];
+      const b4 = bytes[dataOffset + 4];
+      const width = 1 + (((b2 & 0x3f) << 8) | b1);
+      const height = 1 + (((b4 & 0x0f) << 10) | (b3 << 2) | (b2 >> 6));
+      return { width, height };
+    }
+
+    if (chunkType === "VP8 " && chunkSize >= 10 && bytes[dataOffset + 3] === 0x9d && bytes[dataOffset + 4] === 0x01 && bytes[dataOffset + 5] === 0x2a) {
+      return {
+        width: readUint16Le(bytes, dataOffset + 6) & 0x3fff,
+        height: readUint16Le(bytes, dataOffset + 8) & 0x3fff,
+      };
+    }
+
+    offset = dataOffset + chunkSize + (chunkSize % 2);
+  }
+
+  return null;
+}
+
+function bytesToAscii(bytes, start, end) {
+  let text = "";
+  for (let index = start; index < end && index < bytes.length; index += 1) {
+    text += String.fromCharCode(bytes[index]);
+  }
+  return text;
+}
+
+function readUint16Le(bytes, offset) {
+  return (bytes[offset] || 0) | ((bytes[offset + 1] || 0) << 8);
+}
+
+function readUint24Le(bytes, offset) {
+  return (bytes[offset] || 0) | ((bytes[offset + 1] || 0) << 8) | ((bytes[offset + 2] || 0) << 16);
+}
+
+function readUint32Le(bytes, offset) {
+  return ((bytes[offset] || 0) |
+    ((bytes[offset + 1] || 0) << 8) |
+    ((bytes[offset + 2] || 0) << 16) |
+    ((bytes[offset + 3] || 0) << 24)) >>> 0;
+}
+
 function getValidatedImageSize(buffer, format = "png") {
   const bytes = new Uint8Array(buffer || new ArrayBuffer(0));
   if (!bytes.length) {
@@ -7292,7 +9258,23 @@ function getValidatedImageSize(buffer, format = "png") {
     return pngSize;
   }
 
-  return getPngSize(buffer) || { width: 1024, height: 1024 };
+  if (normalizedFormat === "jpeg" || normalizedFormat === "jpg") {
+    const jpegSize = getJpegSize(buffer);
+    if (!jpegSize) {
+      throw new Error("结果图片不是有效 JPEG，已停止导入以避免 Photoshop 弹窗");
+    }
+    return jpegSize;
+  }
+
+  if (normalizedFormat === "webp") {
+    const webpSize = getWebpSize(buffer);
+    if (!webpSize) {
+      throw new Error("结果图片不是有效 WebP，已停止导入以避免 Photoshop 弹窗");
+    }
+    return webpSize;
+  }
+
+  return getPngSize(buffer) || getJpegSize(buffer) || getWebpSize(buffer) || { width: 1024, height: 1024 };
 }
 
 function normalizeBounds(bounds) {
@@ -7345,6 +9327,23 @@ function normalizePath(value) {
 
 function buildApiUrl(baseUrl, path) {
   return `${normalizeBaseUrl(baseUrl)}${normalizePath(path)}`;
+}
+
+function sanitizeDebugEndpointUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  try {
+    const url = new URL(text);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch (error) {
+    return text
+      .replace(/^(https?:\/\/)[^/@\s]+@/i, "$1")
+      .split(/[?#]/)[0];
+  }
 }
 
 function buildComfyUrl(baseUrl, path) {
