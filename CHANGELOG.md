@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.291] - 2026-05-31
+
+### Changed
+
+- Selection repaint no longer stops when the returned screenshot result has a different aspect ratio from the original Photoshop selection. Mismatched results are fitted back to the exact selected crop size before import, and older direct-selection patch imports now warn instead of failing on ratio differences.
+
 ## [0.1.290] - 2026-05-31
 
 ### Fixed

@@ -8,7 +8,7 @@ const imaging = photoshop.imaging;
 const constants = photoshop.constants || {};
 const fs = storage.localFileSystem;
 const PLUGIN_ID = "com.local.openai.photoshop.generator";
-const PLUGIN_VERSION = "0.1.290";
+const PLUGIN_VERSION = "0.1.291";
 
 entrypoints.setup({
   panels: {
@@ -5967,7 +5967,10 @@ function assertDirectSelectionPatchPlacementRatio(item, imageSize, placementRect
   const imageRatio = imageWidth / Math.max(1, imageHeight);
   const placementRatio = placementWidth / Math.max(1, placementHeight);
   if (Math.abs(Math.log(imageRatio / placementRatio)) <= 0.08) return;
-  throw new Error(`选区重绘结果尺寸 ${imageWidth}x${imageHeight} 与原选区 ${placementWidth}x${placementHeight} 比例不一致，已停止导入以避免拉伸变形`);
+  console.warn("[inpaint] direct selection patch ratio differs; fitting result to original selection", JSON.stringify({
+    image: `${imageWidth}x${imageHeight}`,
+    selection: `${placementWidth}x${placementHeight}`,
+  }));
 }
 
 async function placeResultAsLayer(item, selectionInfo, layerName, cropRect = null, opts = {}) {
@@ -7178,11 +7181,14 @@ async function cropPaddedScreenshotResultBase64(b64, crop) {
     return b64;
   }
   if (isDirectScreenshotReferenceCrop(crop)) {
-    assertScreenshotCropResultMatchesSelectionRatio(decoded.width, decoded.height, crop);
-    return b64;
+    return fitScreenshotResultToSelectionCropBase64(decoded, crop);
   }
   if (!shouldCropScreenshotResultAsPaddedCanvas(decoded, crop)) {
-    throw new Error(`截图重绘结果尺寸 ${decoded.width}x${decoded.height} 无法确认是原白底参考画布，已停止导入以避免错误居中裁切`);
+    console.warn("[inpaint] screenshot result does not match reference canvas; fitting whole result to original selection", JSON.stringify({
+      result: `${decoded.width}x${decoded.height}`,
+      selection: `${Math.round(crop.width || 0)}x${Math.round(crop.height || 0)}`,
+    }));
+    return fitScreenshotResultToSelectionCropBase64(decoded, crop);
   }
   const scaleX = decoded.width / crop.canvasWidth;
   const scaleY = decoded.height / crop.canvasHeight;
@@ -7192,14 +7198,13 @@ async function cropPaddedScreenshotResultBase64(b64, crop) {
   const bottom = Math.max(top + 1, Math.min(decoded.height, Math.round((crop.top + crop.height) * scaleY)));
   const width = right - left;
   const height = bottom - top;
-  assertScreenshotCropResultMatchesSelectionRatio(width, height, crop);
   const output = new Uint8Array(width * height * 4);
   for (let y = 0; y < height; y += 1) {
     const sourceOffset = ((top + y) * decoded.width + left) * 4;
     const targetOffset = y * width * 4;
     output.set(decoded.rgba.subarray(sourceOffset, sourceOffset + width * 4), targetOffset);
   }
-  return bytesToBase64(encodePngRgba(width, height, output));
+  return fitScreenshotResultToSelectionCropBase64({ width, height, rgba: output }, crop);
 }
 
 function isDirectScreenshotReferenceCrop(crop) {
@@ -7239,15 +7244,55 @@ function isSameGeometryScreenshotCanvas(width, height, crop) {
   return scale >= 0.25 && scale <= 8;
 }
 
-function assertScreenshotCropResultMatchesSelectionRatio(width, height, crop) {
+function fitScreenshotResultToSelectionCropBase64(decoded, crop) {
   const cropWidth = Math.max(1, Math.round(crop?.width || 1));
   const cropHeight = Math.max(1, Math.round(crop?.height || 1));
-  const resultWidth = Math.max(1, Math.round(width || 1));
-  const resultHeight = Math.max(1, Math.round(height || 1));
+  const resultWidth = Math.max(1, Math.round(decoded?.width || 1));
+  const resultHeight = Math.max(1, Math.round(decoded?.height || 1));
+  const sourceRgba = decoded?.rgba;
+  if (!sourceRgba || !sourceRgba.length) {
+    return bytesToBase64(encodePngRgba(cropWidth, cropHeight, new Uint8Array(cropWidth * cropHeight * 4).fill(255)));
+  }
+  if (resultWidth === cropWidth && resultHeight === cropHeight) {
+    return bytesToBase64(encodePngRgba(resultWidth, resultHeight, sourceRgba));
+  }
+
   const cropRatio = cropWidth / Math.max(1, cropHeight);
   const resultRatio = resultWidth / Math.max(1, resultHeight);
-  if (Math.abs(Math.log(resultRatio / cropRatio)) <= 0.08) return;
-  throw new Error(`截图重绘结果尺寸 ${resultWidth}x${resultHeight} 与原选区 ${cropWidth}x${cropHeight} 比例不一致，已停止导入以避免拉伸变形`);
+  let sourceLeft = 0;
+  let sourceTop = 0;
+  let sourceWidth = resultWidth;
+  let sourceHeight = resultHeight;
+
+  if (Math.abs(Math.log(resultRatio / cropRatio)) > 0.002) {
+    if (resultRatio > cropRatio) {
+      sourceWidth = Math.max(1, Math.round(resultHeight * cropRatio));
+      sourceLeft = Math.max(0, Math.floor((resultWidth - sourceWidth) / 2));
+    } else {
+      sourceHeight = Math.max(1, Math.round(resultWidth / cropRatio));
+      sourceTop = Math.max(0, Math.floor((resultHeight - sourceHeight) / 2));
+    }
+    console.warn("[inpaint] fitting mismatched screenshot result to selection", JSON.stringify({
+      result: `${resultWidth}x${resultHeight}`,
+      selection: `${cropWidth}x${cropHeight}`,
+      sourceCrop: `${sourceLeft},${sourceTop},${sourceWidth}x${sourceHeight}`,
+    }));
+  }
+
+  const output = new Uint8Array(cropWidth * cropHeight * 4);
+  for (let y = 0; y < cropHeight; y += 1) {
+    const sourceY = Math.min(resultHeight - 1, sourceTop + Math.floor((y / cropHeight) * sourceHeight));
+    for (let x = 0; x < cropWidth; x += 1) {
+      const sourceX = Math.min(resultWidth - 1, sourceLeft + Math.floor((x / cropWidth) * sourceWidth));
+      const sourceOffset = (sourceY * resultWidth + sourceX) * 4;
+      const outputOffset = (y * cropWidth + x) * 4;
+      output[outputOffset] = sourceRgba[sourceOffset];
+      output[outputOffset + 1] = sourceRgba[sourceOffset + 1];
+      output[outputOffset + 2] = sourceRgba[sourceOffset + 2];
+      output[outputOffset + 3] = sourceRgba[sourceOffset + 3];
+    }
+  }
+  return bytesToBase64(encodePngRgba(cropWidth, cropHeight, output));
 }
 
 function shouldKeepScreenshotResultWithoutCrop(decoded, crop) {

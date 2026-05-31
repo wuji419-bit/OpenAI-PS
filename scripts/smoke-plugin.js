@@ -1159,17 +1159,11 @@ async function runVmSmoke() {
         { width: 80, height: 60 },
         { left: 10, top: 12, right: 50, bottom: 42, width: 40, height: 30 }
       );
-      let rejectedWrongRatioDirectPatchPlacement = false;
-      try {
-        assertDirectSelectionPatchPlacementRatio(
-          { mode: "inpaint", placementMode: "direct-selection-patch" },
-          { width: 1024, height: 1024 },
-          { left: 10, top: 12, right: 50, bottom: 42, width: 40, height: 30 }
-        );
-      } catch (error) {
-        rejectedWrongRatioDirectPatchPlacement = /比例不一致/.test(String(error?.message || error));
-      }
-      assert(rejectedWrongRatioDirectPatchPlacement, "Final placement should reject wrong-ratio direct selection patches before Photoshop can stretch them");
+      assertDirectSelectionPatchPlacementRatio(
+        { mode: "inpaint", placementMode: "direct-selection-patch" },
+        { width: 1024, height: 1024 },
+        { left: 10, top: 12, right: 50, bottom: 42, width: 40, height: 30 }
+      );
       const savedCreateSessionToken = fs.createSessionToken;
       let placedTempFileName = "";
       fs.createSessionToken = async (file) => {
@@ -1740,26 +1734,30 @@ async function runVmSmoke() {
         solidSquareWrongCropPixels[index + 2] = 166;
         solidSquareWrongCropPixels[index + 3] = 255;
       }
-      let refusedUnverifiedPaddedCrop = false;
-      try {
-        await cropPaddedScreenshotResultBase64(bytesToBase64(encodePngRgba(512, 512, solidSquareWrongCropPixels)), tinyWidePadded.crop);
-      } catch (error) {
-        refusedUnverifiedPaddedCrop = /比例不一致|无法确认是原白底参考画布/.test(String(error?.message || error));
-      }
-      assert(refusedUnverifiedPaddedCrop, "Small screenshot crop-back should reject square outputs that do not preserve the selected crop ratio");
+      const fittedUnverifiedPaddedCrop = await cropPaddedScreenshotResultBase64(bytesToBase64(encodePngRgba(512, 512, solidSquareWrongCropPixels)), tinyWidePadded.crop);
+      const fittedUnverifiedPaddedCropDecoded = await decodePngRgbaBase64(fittedUnverifiedPaddedCrop);
+      assert(fittedUnverifiedPaddedCropDecoded.width === 40 && fittedUnverifiedPaddedCropDecoded.height === 30, "Small screenshot crop-back should fit square outputs to the selected crop instead of rejecting them");
       const largeScreenshotPixels = new Uint8Array(320 * 240 * 4).fill(255);
       const directReference = await createPaddedScreenshotReferenceBase64(bytesToBase64(encodePngRgba(320, 240, largeScreenshotPixels)));
       const directReferenceDecoded = await decodePngRgbaBase64(directReference.b64);
       assert(directReferenceDecoded.width === 320 && directReferenceDecoded.height === 240, "Normal-sized screenshot repaint inputs should upload the selected crop itself without white context margin");
       assert(directReferenceDecoded.width !== directReferenceDecoded.height, "Normal-sized screenshot repaint inputs should not be forced into an unrelated square canvas");
       assert(directReference.crop.left === 0 && directReference.crop.top === 0 && directReference.crop.width === 320 && directReference.crop.height === 240, "Normal screenshot reference crop metadata should record a direct selected-crop upload");
-      let refusedWrongRatioDirectScreenshot = false;
-      try {
-        await cropPaddedScreenshotResultBase64(bytesToBase64(encodePngRgba(1024, 1024, new Uint8Array(1024 * 1024 * 4).fill(255))), directReference.crop);
-      } catch (error) {
-        refusedWrongRatioDirectScreenshot = /比例不一致|无法确认是原白底参考画布/.test(String(error?.message || error));
-      }
-      assert(refusedWrongRatioDirectScreenshot, "Normal screenshot repaint should reject square or wrong-ratio model outputs instead of stretching them into the selection");
+      const fittedWrongRatioDirectScreenshot = await cropPaddedScreenshotResultBase64(bytesToBase64(encodePngRgba(1024, 1024, new Uint8Array(1024 * 1024 * 4).fill(255))), directReference.crop);
+      const fittedWrongRatioDirectScreenshotDecoded = await decodePngRgbaBase64(fittedWrongRatioDirectScreenshot);
+      assert(fittedWrongRatioDirectScreenshotDecoded.width === 320 && fittedWrongRatioDirectScreenshotDecoded.height === 240, "Normal screenshot repaint should fit square or wrong-ratio model outputs to the selected crop instead of rejecting them");
+      const wideSelectionReference = {
+        canvasWidth: 1075,
+        canvasHeight: 261,
+        left: 0,
+        top: 0,
+        width: 1075,
+        height: 261,
+      };
+      const tallReturnedPixels = new Uint8Array(1801 * 873 * 4).fill(255);
+      const fittedWideSelection = await cropPaddedScreenshotResultBase64(bytesToBase64(encodePngRgba(1801, 873, tallReturnedPixels)), wideSelectionReference);
+      const fittedWideSelectionDecoded = await decodePngRgbaBase64(fittedWideSelection);
+      assert(fittedWideSelectionDecoded.width === 1075 && fittedWideSelectionDecoded.height === 261, "Wide selection repaint should fit mismatched returned dimensions back to the exact Photoshop selection size");
       const croppedPadded = await cropPaddedScreenshotResultBase64(padded.b64, padded.crop);
       const croppedPaddedDecoded = await decodePngRgbaBase64(croppedPadded);
       assert(croppedPaddedDecoded.width === 2 && croppedPaddedDecoded.height === 2, "Padded screenshot results should crop back to the original selection ratio");
