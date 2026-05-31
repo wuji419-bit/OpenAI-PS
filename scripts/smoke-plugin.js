@@ -590,6 +590,11 @@ async function runVmSmoke() {
 
       const explicit = buildExplicitSemanticSplitTargets("角色");
       assert(explicit.length === 1 && explicit[0].target === "角色", "Single split target should be accepted");
+      const explicitList = buildExplicitSemanticSplitTargets("角色，武器，道具");
+      assert(explicitList.length === 3 && explicitList[1].target === "武器", "Comma-separated split targets should be accepted");
+      const splitInstruction = buildExplicitSemanticSplitTargets("请自动仔细拆出所有元素，像后面的参考图那样分层");
+      assert(splitInstruction.length === 0, "General split instructions should be treated as auto-detection hints, not one explicit target");
+      assert(MAX_SEMANTIC_SPLIT_TARGETS >= 24, "Semantic split should allow detailed all-element target plans");
       assert(DEFAULT_BASE_URL === "http://127.0.0.1:49456/v1", "Default Base URL should match the active Cockpit API service");
       assert(DEFAULT_SEMANTIC_EDIT_MODEL === "gpt-5.5", "Responses image tool requests should default to the expected mainline model");
       assert(DEFAULT_CUTOUT_ANALYSIS_MODEL === "gpt-5.5", "Semantic analysis requests should default to the expected mainline model");
@@ -1628,6 +1633,28 @@ async function runVmSmoke() {
       assert(splitLayerDecoded.width === 20 && splitLayerDecoded.height === 20, "Semantic split output should remain full-canvas, not cropped to the element bounds");
       assert(splitLayerDecoded.rgba[3] === 0, "Semantic split white matte should become transparent before Photoshop placement");
       assert(splitLayerDecoded.rgba[((4 * 20 + 5) * 4) + 3] === 255, "Semantic split target pixels should remain opaque");
+      const savedKoukoutuForSplit = requestKoukoutuCutout;
+      let splitKoukoutuCalled = 0;
+      requestKoukoutuCutout = async (settings, imageB64) => {
+        splitKoukoutuCalled += 1;
+        const decoded = await decodePngRgbaBase64(imageB64);
+        const cutoutPixels = new Uint8Array(decoded.rgba);
+        for (let i = 0; i < cutoutPixels.length; i += 4) {
+          const white = cutoutPixels[i] > 245 && cutoutPixels[i + 1] > 245 && cutoutPixels[i + 2] > 245;
+          cutoutPixels[i + 3] = white ? 0 : 255;
+        }
+        return {
+          b64: bytesToBase64(encodePngRgba(decoded.width, decoded.height, cutoutPixels)),
+          format: "png",
+        };
+      };
+      const koukoutuSplitLayer = await normalizeSemanticSplitLayerItem({
+        b64: bytesToBase64(encodePngRgba(20, 20, splitPixels)),
+        format: "png",
+      }, { width: 20, height: 20 }, "抠抠图弓身", 5, { koukoutuApiKey: "test-key", koukoutuFormat: "png" });
+      requestKoukoutuCutout = savedKoukoutuForSplit;
+      assert(splitKoukoutuCalled === 1 && koukoutuSplitLayer.koukoutuMatte, "Semantic split should use Koukoutu for white-matte transparency when configured");
+      assert(koukoutuSplitLayer.importVisibleRect.left === 5 && koukoutuSplitLayer.importVisibleRect.top === 4, "Koukoutu split layers should preserve visible bounds for original-position import");
       const savedSplitUrlSendRequest = sendRequest;
       sendRequest = async () => ({
         ok: true,
@@ -1675,6 +1702,11 @@ async function runVmSmoke() {
       const splitLayerPrompt = buildSemanticSplitLayerPrompt({ label: "弓身", target: "弓身" }, 0, 2, { width: 20, height: 20 });
       assert(splitLayerPrompt.includes("full-canvas PNG exactly 20x20 pixels"), "Semantic split prompt should demand exact full-canvas dimensions");
       assert(splitLayerPrompt.includes("Do not crop") && splitLayerPrompt.includes("recenter"), "Semantic split prompt should forbid crop and recenter drift");
+      assert(splitLayerPrompt.includes("manual PSD layer separation"), "Semantic split prompt should request careful manual-style layer separation");
+      assert(splitLayerPrompt.includes("Do not include neighboring touching elements"), "Semantic split prompt should prevent merged neighboring elements");
+      assert(splitLayerPrompt.includes("Koukoutu background-removal"), "Semantic split prompt should ask for white matte before Koukoutu cutout");
+      assert(isTransientSemanticSplitLayerError(new Error('HTTP 502: Post "https://chatgpt.com/backend-api/codex/responses": EOF | upstream_error | invalid_request_error')), "Semantic split should retry Codex upstream 502 EOF failures");
+      assert(!isTransientSemanticSplitLayerError(new Error("尺寸 10x10 与 Photoshop 画布 20x10 比例不一致")), "Semantic split should not retry deterministic canvas mismatch errors");
       const savedDecompressionStream = globalThis.DecompressionStream;
       globalThis.DecompressionStream = undefined;
       const tinyRgba = new Uint8Array([1, 2, 3, 255, 4, 5, 6, 128]);

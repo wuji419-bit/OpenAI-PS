@@ -134,6 +134,7 @@ function getTempDevelopmentDirs() {
 function collectTargets() {
   return [...new Set([
     "/private/tmp/openai-photoshop-generator-dev",
+    path.join(os.homedir(), "source/OpenAI-PS"),
     path.join(os.homedir(), "Library/Application Support/Adobe/UXP/Plugins/External/com.local.openai.photoshop.generator"),
     path.join(os.homedir(), "Library/Application Support/Adobe/UXP/PluginsStorage/PHSP/27/External/com.local.openai.photoshop.generator"),
     path.join(os.homedir(), "Library/Application Support/Adobe/UXP/PluginsStorage/PHSP/27/Developer/com.local.openai.photoshop.generator"),

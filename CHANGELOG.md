@@ -2,6 +2,37 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.290] - 2026-05-31
+
+### Fixed
+
+- Automatic semantic split placement now uses the same visible-bounds alignment path as manual import, so transparent split layers are moved back onto their original canvas coordinates instead of relying on Photoshop's default placed-object bounds.
+- Split result metadata now preserves the Koukoutu matte flag for live diagnostics, making it easier to verify that拆图 layers used the API cutout path rather than the old JavaScript white-matte fallback.
+
+## [0.1.289] - 2026-05-31
+
+### Fixed
+
+- Semantic split now sends each full-canvas white-matte layer through the configured Koukoutu background-removal API instead of using JavaScript white-threshold matting, preserving cleaner edges and avoiding speckled/broken cutouts.
+- Split imports now record each layer's visible bounds and align those bounds back to the original canvas position, preventing transparent PNGs from being centered by Photoshop's visible-bounds placement behavior.
+- Split mode now requires the Koukoutu API key up front because the transparent alpha matte is part of the intended拆图 workflow.
+
+## [0.1.288] - 2026-05-31
+
+### Fixed
+
+- Semantic split layer extraction now retries transient upstream failures such as `HTTP 502`, `EOF`, and `upstream_error` before giving up on an individual layer.
+- Dense split runs no longer abort the whole job when one generated layer fails; failed layer targets are skipped after retries so successful layers can still be imported back into Photoshop.
+- Codex sidecar split extraction now pauses briefly between full-canvas layer requests to reduce upstream disconnects during high-count拆图 batches.
+
+## [0.1.287] - 2026-05-30
+
+### Changed
+
+- Semantic split now plans拆图 in two passes: first broad visual blocks such as victory banners, ranking panels, reward grids, CTA strips, and bottom buttons, then detailed child elements inside each block.
+- Automatic split planning now allows up to 40 semantic targets, treats general “拆所有元素” instructions as auto-detection hints instead of one target, and asks for high-detail vision analysis so dense game-result screens can be decomposed more carefully.
+- Split layer extraction prompts now carry the large-block context and approximate canvas region, reducing merged neighboring elements while preserving full-canvas original-coordinate layer placement.
+
 ## [0.1.286] - 2026-05-29
 
 ### Fixed

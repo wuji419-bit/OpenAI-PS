@@ -8,7 +8,7 @@ const imaging = photoshop.imaging;
 const constants = photoshop.constants || {};
 const fs = storage.localFileSystem;
 const PLUGIN_ID = "com.local.openai.photoshop.generator";
-const PLUGIN_VERSION = "0.1.286";
+const PLUGIN_VERSION = "0.1.290";
 
 entrypoints.setup({
   panels: {
@@ -103,14 +103,23 @@ const TEMP_SELECTION_CHANNEL_PREFIX = "__openai_inpaint_selection_";
 const MAX_BATCH_COUNT = 10;
 const MAX_SPLIT_LAYERS = 40;
 const SPLIT_ALPHA_THRESHOLD = 18;
-const MAX_SEMANTIC_SPLIT_TARGETS = 10;
+const MAX_SEMANTIC_SPLIT_GROUPS = 8;
+const MAX_SEMANTIC_SPLIT_TARGETS = 40;
+const MAX_SEMANTIC_SPLIT_TARGETS_PER_GROUP = 10;
+const SEMANTIC_SPLIT_TRANSIENT_RETRY_DELAYS_MS = [1800, 4500];
+const SEMANTIC_SPLIT_SIDECAR_SETTLE_DELAY_MS = 650;
 const SMOKE_REQUEST_TIMEOUT_MS = 180000;
 const DEFAULT_SEMANTIC_SPLIT_TARGETS = [
   { label: "底框/背景", target: "the complete clean base frame, outer border, panel shell, and background surface only; remove foreground icons/text/buttons and reconstruct the covered surface texture with no holes" },
-  { label: "填充条", target: "the inner colored progress fill bar only, such as the red health/energy fill, including its highlights but excluding the frame" },
-  { label: "顶部徽章", target: "the top badge, plate, icon, bone label, decorative emblem, or attached label shape only, excluding any text on it" },
-  { label: "文字数字", target: "all visible text, numbers, letters, counters, labels, and glyphs only, excluding the plate or badge behind them" },
-  { label: "装饰高光", target: "small decorative highlights, sparkles, shine strokes, glows, and accents only if they are visually separate from the main frame and fill" },
+  { label: "主体轮廓", target: "the main character, object, or sprite silhouette only when it is a single remaining body/asset layer; exclude detachable props, text, effects, and background/base surfaces" },
+  { label: "头部五官", target: "head, face, eyes, mouth, ears, horns, hair clumps, or facial details that are visually separable from the body" },
+  { label: "身体服饰", target: "torso, clothing panels, armor pieces, cloth parts, belts, or body decorations that are visually separable" },
+  { label: "手臂手部", target: "left and right arms, hands, sleeves, gloves, claws, or held contact parts that should be editable independently" },
+  { label: "腿脚尾巴", target: "legs, feet, shoes, tail, fins, wings, or lower-body appendages that should be editable independently" },
+  { label: "武器道具", target: "weapons, tools, handheld props, accessories, attached charms, bags, or other separate props only" },
+  { label: "文字数字", target: "all visible text, numbers, letters, counters, logos, labels, and glyphs only, excluding any plate, badge, button, or object behind them" },
+  { label: "UI图标按钮", target: "icons, badges, plates, buttons, emblems, progress fills, meters, slots, and UI controls as separate editable elements, excluding text on top" },
+  { label: "特效阴影", target: "glows, sparks, smoke, magic effects, motion streaks, cast shadows, reflections, and highlights only when visually separate from the main object" },
 ];
 const COMFY_WORKFLOWS = {
   "comfy:basic-inpaint": {
@@ -888,6 +897,10 @@ async function runGeneration() {
     setStatus("请先在设置里填写抠抠图 API Key");
     return;
   }
+  if (state.mode === "split" && !settings.koukoutuApiKey) {
+    setStatus("拆图现在会用抠抠图做透明抠像，请先在设置里填写抠抠图 API Key");
+    return;
+  }
   if (!settings.apiKey && !isComfyModel(settings.model) && state.mode !== "cutout") {
     setStatus("请先填写 OpenAI API Key");
     return;
@@ -1062,11 +1075,8 @@ async function runGeneration() {
       placementRect = fullRect;
       setProgress(34, true);
       const splitTargets = await resolveSemanticSplitTargets(settings, image, splitInput.docSize, rawPrompt);
-      items = (await requestSemanticSplitLayers(splitSettings, image, splitInput.docSize, splitTargets)).map((item) => ({
-        ...item,
-        targetRect: fullRect,
-        placementRect: fullRect,
-      }));
+      items = (await requestSemanticSplitLayers(splitSettings, image, splitInput.docSize, splitTargets))
+        .map((item) => scaleSemanticSplitItemToDocument(item, splitInput.docSize, fullRect));
     }
 
     throwIfCancelled();
@@ -1095,6 +1105,7 @@ async function runGeneration() {
       splitLabel: item.splitLabel || null,
       splitBounds: item.splitBounds || null,
       whiteMatteMask: Boolean(item.whiteMatteMask),
+      koukoutuMatte: Boolean(item.koukoutuMatte),
       preclippedImport: Boolean(item.preclippedImport),
       previewB64: item.previewB64 || null,
       previewBounds: item.previewBounds || null,
@@ -1165,7 +1176,10 @@ async function runGeneration() {
       setStatus(`正在把 ${stamped.length} 个拆图元素放回 Photoshop 图层...`);
       for (let index = 0; index < stamped.length; index += 1) {
         const item = stamped[index];
-        await placeResultAsLayer(item, item.placementRect || item.targetRect, buildSplitLayerName(item, index + 1), null, { preserveImageAspect: true });
+        await placeResultAsLayer(item, item.placementRect || item.targetRect, buildSplitLayerName(item, index + 1), null, {
+          fitByImageSize: true,
+          alignVisibleRect: true,
+        });
         setProgress(92 + Math.round(((index + 1) / stamped.length) * 7), true);
       }
     }
@@ -1507,13 +1521,14 @@ async function withOfflineDiagnosticStubs(callback) {
     const width = Math.max(1, Math.round(docSize?.width || getPngDimensionsFromBase64(imageB64)?.width || 512));
     const height = Math.max(1, Math.round(docSize?.height || getPngDimensionsFromBase64(imageB64)?.height || 512));
     const items = (targets || [{ label: "离线元素", target: "offline element" }]).slice(0, 2).map((target, index) => ({
-      b64: createOfflineDiagnosticPngBase64(width, height, `split-${index}`, { whiteMatte: true, offset: index }),
+      b64: createOfflineDiagnosticPngBase64(width, height, `split-${index}`, { transparent: true, offset: index }),
       format: "png",
       splitIndex: index + 1,
       splitLabel: target.label || `离线元素${index + 1}`,
       targetRect: { left: 0, top: 0, right: width, bottom: height, width, height },
       placementRect: { left: 0, top: 0, right: width, bottom: height, width, height },
-      whiteMatteMask: true,
+      importVisibleRect: { left: 0, top: 0, right: width, bottom: height, width, height },
+      koukoutuMatte: true,
     }));
     diagnostics.splitCalls.push({
       mode: state.mode,
@@ -2177,7 +2192,8 @@ function buildSplitImagePrompt(userPrompt) {
     "Create a clean full-canvas image on a plain white matte background.",
     "Keep each element at its original position, original scale, and original visual style.",
     "Remove only the background or empty canvas. Do not add labels, numbers, grids, shadows, outlines, or new objects.",
-    "Do not merge separate props, body parts, accessories, weapons, tails, hair pieces, or UI sprites if they are visually distinct.",
+    "Do not merge separate props, body parts, clothing pieces, accessories, weapons, tails, hair pieces, effects, shadows, text, icons, buttons, or UI sprites if they are visually distinct.",
+    "Think like a PSD asset cleanup pass: every part that a designer may move, recolor, hide, animate, or edit separately should stay visually separable.",
     "The returned image should preserve the same overall canvas composition so a script can remove the matte and split separate Photoshop layers.",
     extra ? `User split notes: ${extra}` : "",
   ].filter(Boolean).join("\n");
@@ -2200,12 +2216,26 @@ async function resolveSemanticSplitTargets(settings, imageB64, docSize, userProm
 function buildExplicitSemanticSplitTargets(userPrompt) {
   const text = String(userPrompt || "").trim();
   if (!text) return [];
+  const explicitPrefixMatch = text.match(/^(?:targets?|layers?|目标|图层|拆图目标|拆分目标)\s*[:：]\s*/i);
+  const textWithoutPrefix = explicitPrefixMatch ? text.slice(explicitPrefixMatch[0].length).trim() : text;
+  const hasListSeparator = /[\n,，、;；|/]/.test(textWithoutPrefix);
 
-  const explicit = text
+  const candidates = textWithoutPrefix
     .split(/[\n,，、;；|/]+/g)
     .map((value) => value.trim())
     .filter((value) => value.length >= 2)
     .slice(0, MAX_SEMANTIC_SPLIT_TARGETS);
+  const explicit = explicitPrefixMatch
+    ? candidates
+    : candidates.filter(isLikelySingleSemanticSplitTarget);
+
+  if (!explicitPrefixMatch && !hasListSeparator && !isLikelySingleSemanticSplitTarget(textWithoutPrefix)) {
+    return [];
+  }
+
+  if (!explicitPrefixMatch && hasListSeparator && explicit.length < 2) {
+    return [];
+  }
 
   return explicit.map((target, index) => ({
     label: target.slice(0, 24) || `元素${index + 1}`,
@@ -2213,7 +2243,227 @@ function buildExplicitSemanticSplitTargets(userPrompt) {
   }));
 }
 
+function isLikelySingleSemanticSplitTarget(text) {
+  const value = String(text || "").trim();
+  if (!value) return false;
+  if (value.length > 24) return false;
+  if (/[。.!?？]/.test(value)) return false;
+  return !/(拆|拆分|分层|图层|所有|全部|每个|逐个|自动|仔细|细拆|参考|像|按照|后面|样子|示例|split|separate|separation|layer|layers|all|every|auto|automatic|reference|example|like|style)/i.test(value);
+}
+
 async function requestGptSplitTargets(settings, imageB64, docSize, userPrompt) {
+  if (!settings.apiKey || !settings.baseUrl) {
+    return [];
+  }
+
+  try {
+    setStatus("正在先按大区块识别拆图结构...");
+    const groups = await requestGptSplitGroups(settings, imageB64, docSize, userPrompt);
+    if (groups.length) {
+      const groupedTargets = [];
+      for (let index = 0; index < groups.length && groupedTargets.length < MAX_SEMANTIC_SPLIT_TARGETS; index += 1) {
+        const remaining = MAX_SEMANTIC_SPLIT_TARGETS - groupedTargets.length;
+        const group = groups[index];
+        setStatus(`正在逐块识别拆图元素 ${index + 1}/${groups.length}：${group.label}`);
+        const groupTargets = await requestGptSplitTargetsForGroup(settings, imageB64, docSize, userPrompt, group, remaining);
+        groupedTargets.push(...groupTargets.slice(0, remaining));
+      }
+
+      const normalized = normalizeSemanticSplitTargets(groupedTargets);
+      if (normalized.length >= 2) {
+        return normalized;
+      }
+    }
+  } catch (error) {
+    console.warn("GPT grouped split target analysis failed", error);
+  }
+
+  return requestGptFlatSplitTargets(settings, imageB64, docSize, userPrompt);
+}
+
+async function requestGptSplitGroups(settings, imageB64, docSize, userPrompt) {
+  const regionSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      left: { type: "number" },
+      top: { type: "number" },
+      right: { type: "number" },
+      bottom: { type: "number" },
+    },
+    required: ["left", "top", "right", "bottom"],
+  };
+
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      groups: {
+        type: "array",
+        maxItems: MAX_SEMANTIC_SPLIT_GROUPS,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            label: { type: "string" },
+            region: regionSchema,
+            description: { type: "string" },
+            reason: { type: "string" },
+          },
+          required: ["label", "region", "description", "reason"],
+        },
+      },
+      confidence: { type: "number" },
+    },
+    required: ["groups", "confidence"],
+  };
+
+  const payload = {
+    model: DEFAULT_SEMANTIC_EDIT_MODEL,
+    input: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: [
+              "Return JSON only. Step 1 for Photoshop semantic splitting: identify large visual/layout blocks before small elements.",
+              "Use the same logic as red annotation frames around a design: first find big regions such as top victory banner, subtitle/level strip, ranking panel, reward grid, call-to-action strip, and bottom buttons.",
+              "For other images, find broad regions such as character body, weapon/prop area, effects area, UI panel, background/base area, or grouped object clusters.",
+              "Do not list individual icons or text here; each group should be a broad block that will be decomposed in the next step.",
+              "Return approximate bounding boxes in original Photoshop canvas pixel coordinates.",
+              "Include overlapping/attached decorative regions with the block they visually belong to.",
+              `Return up to ${MAX_SEMANTIC_SPLIT_GROUPS} groups, ordered from back/top to front/bottom when possible.`,
+              `Document size: ${docSize?.width || "unknown"} x ${docSize?.height || "unknown"}.`,
+              `Optional user hint: ${String(userPrompt || "").trim() || "(none)"}`,
+            ].join("\n"),
+          },
+          {
+            type: "input_image",
+            image_url: toDataUrl(imageB64, inferImageFormatFromValue(imageB64) || "png"),
+            detail: "high",
+          },
+        ],
+      },
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "semantic_split_groups",
+        strict: true,
+        schema,
+      },
+    },
+  };
+
+  const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${settings.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  }, "GPT 自动拆图大区块识别");
+  if (!response.ok) return [];
+
+  const plan = parseJsonFromResponseOutput(parseResponsesJsonText(await response.text()));
+  return normalizeSemanticSplitGroups(plan?.groups || [], docSize);
+}
+
+async function requestGptSplitTargetsForGroup(settings, imageB64, docSize, userPrompt, group, remaining = MAX_SEMANTIC_SPLIT_TARGETS_PER_GROUP) {
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      elements: {
+        type: "array",
+        maxItems: MAX_SEMANTIC_SPLIT_TARGETS_PER_GROUP,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            label: { type: "string" },
+            target: { type: "string" },
+            reason: { type: "string" },
+          },
+          required: ["label", "target", "reason"],
+        },
+      },
+      confidence: { type: "number" },
+    },
+    required: ["elements", "confidence"],
+  };
+
+  const regionText = formatSemanticSplitRegion(group?.region);
+  const payload = {
+    model: DEFAULT_SEMANTIC_EDIT_MODEL,
+    input: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: [
+              "Return JSON only. Step 2 for Photoshop semantic splitting: decompose one large block into small editable layer targets.",
+              `Large block: ${group?.label || "unknown block"}.`,
+              `Block description: ${group?.description || "(none)"}.`,
+              regionText ? `Approximate block region on the original canvas: ${regionText}.` : "",
+              "Work inside this block first, but remember every final extraction must later return a full-canvas layer at original coordinates.",
+              "Be exhaustive inside this block: split base surfaces, frames, banners, row backgrounds, avatars, icons, medals, progress bars, text, numbers, labels, buttons, item tiles, rewards, shadows, highlights, effects, and decorations when visually distinct.",
+              "For ranking or reward panels, split repeated rows/items into separate targets when they contain distinct icons, text, bars, values, or item art.",
+              "For a top victory banner, split the banner base, flags/horns/wings/leaves, title text, subtitle strip, glow/effects, and foreground decorations separately.",
+              "For bottom buttons or CTA bars, split each button base, button text, icons, glow/highlight, arrow/video icon, and badge separately.",
+              "If the block has a visible base/frame/surface, include a clean base layer first that removes foreground text/icons/items and reconstructs the covered surface.",
+              "Do not include elements from other large blocks unless they overlap this block and visually belong to it.",
+              `Return up to ${Math.min(MAX_SEMANTIC_SPLIT_TARGETS_PER_GROUP, Math.max(1, remaining))} elements for this block; prefer precise layers over merged layers.`,
+              "Use short Chinese labels prefixed by the block when useful, such as 顶部-胜利字, 排行-第1头像, 奖励-钻石, 底部-双倍按钮.",
+              `Document size: ${docSize?.width || "unknown"} x ${docSize?.height || "unknown"}.`,
+              `Optional user hint: ${String(userPrompt || "").trim() || "(none)"}`,
+            ].filter(Boolean).join("\n"),
+          },
+          {
+            type: "input_image",
+            image_url: toDataUrl(imageB64, inferImageFormatFromValue(imageB64) || "png"),
+            detail: "high",
+          },
+        ],
+      },
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "semantic_split_group_targets",
+        strict: true,
+        schema,
+      },
+    },
+  };
+
+  try {
+    const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${settings.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    }, "GPT 自动拆图分块元素识别");
+    if (!response.ok) return [];
+    const plan = parseJsonFromResponseOutput(parseResponsesJsonText(await response.text()));
+    return (Array.isArray(plan?.elements) ? plan.elements : []).map((item, index) => ({
+      label: buildGroupedSemanticSplitLabel(group?.label, item?.label, index),
+      target: String(item?.target || item?.label || "").trim(),
+      groupLabel: group?.label || "",
+      groupDescription: group?.description || "",
+      region: group?.region || null,
+    }));
+  } catch (error) {
+    console.warn(`GPT split element analysis failed for group ${group?.label || ""}`, error);
+    return [];
+  }
+}
+
+async function requestGptFlatSplitTargets(settings, imageB64, docSize, userPrompt) {
   if (!settings.apiKey || !settings.baseUrl) {
     return [];
   }
@@ -2224,6 +2474,7 @@ async function requestGptSplitTargets(settings, imageB64, docSize, userPrompt) {
     properties: {
       elements: {
         type: "array",
+        maxItems: MAX_SEMANTIC_SPLIT_TARGETS,
         items: {
           type: "object",
           additionalProperties: false,
@@ -2251,12 +2502,18 @@ async function requestGptSplitTargets(settings, imageB64, docSize, userPrompt) {
             text: [
               "Return JSON only. Identify Photoshop layers for semantic image splitting.",
               "The user wants automatic asset decomposition, not connected-component splitting.",
-              "Find separate UI/art elements that a designer would expect as independent layers, even when the pixels touch.",
-              "For a game health bar, split the base frame, inner colored fill bar, top badge/plate, and text/numbers into separate elements.",
-              "Always separate visible text/numbers from the badge, plate, button, panel, or icon behind them.",
+              "Be exhaustive: list every visually meaningful element that should become its own editable Photoshop layer.",
+              "Do not stop at broad groups such as character, weapon, UI, or decoration when smaller visible parts can be edited independently.",
+              "Find separate UI/art elements that a designer would expect as independent layers, even when the pixels touch or overlap.",
+              "For characters or creatures, split visible body parts, hair clumps, face details, clothing/armor pieces, wings, tails, weapons, held props, accessories, shadows, and effects when they are visually distinct.",
+              "For game UI, split the base frame/background, progress fills, icons, badges/plates, buttons, slots, highlights, decorations, and text/numbers into separate elements.",
+              "For products, props, or scenes, split major object parts, logos/labels, attached accessories, lighting effects, cast shadows/reflections, and background/base surfaces when they are visually separable.",
+              "Always separate visible text/numbers/logos from the badge, plate, button, panel, icon, product, or surface behind them.",
               "Always separate progress/health/energy fill from the outer frame/container.",
-              "When the image has a panel, card, parchment, frame, slot background, or other base surface, include a clean base/background layer that removes foreground elements and reconstructs the covered surface so it has no holes.",
+              "When the image has a panel, card, parchment, frame, slot background, white canvas, or other base surface, include a clean base/background layer that removes foreground elements and reconstructs the covered surface so it has no holes.",
               "Do not include the plain matte/background as an element.",
+              `Return as many elements as needed up to ${MAX_SEMANTIC_SPLIT_TARGETS}; prefer more precise layers over fewer merged layers.`,
+              "Use short Chinese labels that name the exact part, such as 左手, 右手武器, 红色血条, 数字x10, 发光特效.",
               "Order elements from back to front when possible.",
               `Document size: ${docSize?.width || "unknown"} x ${docSize?.height || "unknown"}.`,
               `Optional user hint: ${String(userPrompt || "").trim() || "(none)"}`,
@@ -2265,7 +2522,7 @@ async function requestGptSplitTargets(settings, imageB64, docSize, userPrompt) {
           {
             type: "input_image",
             image_url: toDataUrl(imageB64, inferImageFormatFromValue(imageB64) || "png"),
-            detail: "low",
+            detail: "high",
           },
         ],
       },
@@ -2299,19 +2556,83 @@ async function requestGptSplitTargets(settings, imageB64, docSize, userPrompt) {
   }
 }
 
+function normalizeSemanticSplitGroups(groups, docSize) {
+  if (!Array.isArray(groups)) return [];
+
+  const seen = new Set();
+  return groups
+    .map((item, index) => {
+      const label = cleanSemanticSplitLabel(item?.label, `大块${index + 1}`);
+      const description = String(item?.description || item?.target || item?.reason || label).trim();
+      const region = normalizeSemanticSplitRegion(item?.region, docSize);
+      return { label, description, region };
+    })
+    .filter((item) => item.label && item.description)
+    .filter((item) => {
+      const key = `${item.label}|${formatSemanticSplitRegion(item.region)}`.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, MAX_SEMANTIC_SPLIT_GROUPS);
+}
+
+function cleanSemanticSplitLabel(value, fallback = "元素") {
+  const label = String(value || "").replace(/\s+/g, "").trim();
+  return (label || fallback).slice(0, 24);
+}
+
+function buildGroupedSemanticSplitLabel(groupLabel, elementLabel, index) {
+  const group = cleanSemanticSplitLabel(groupLabel || "", "");
+  const element = cleanSemanticSplitLabel(elementLabel || "", `元素${index + 1}`);
+  if (!group || element.startsWith(group)) return element.slice(0, 24);
+  return `${group}-${element}`.slice(0, 24);
+}
+
+function normalizeSemanticSplitRegion(region, docSize) {
+  if (!region) return null;
+  const docWidth = Math.max(0, Math.round(toNumber(docSize?.width) || 0));
+  const docHeight = Math.max(0, Math.round(toNumber(docSize?.height) || 0));
+  const left = Math.round(toNumber(region.left));
+  const top = Math.round(toNumber(region.top));
+  const right = Math.round(toNumber(region.right));
+  const bottom = Math.round(toNumber(region.bottom));
+  if (![left, top, right, bottom].every(Number.isFinite)) return null;
+  const clampedLeft = docWidth > 0 ? Math.max(0, Math.min(docWidth, left)) : Math.max(0, left);
+  const clampedTop = docHeight > 0 ? Math.max(0, Math.min(docHeight, top)) : Math.max(0, top);
+  const clampedRight = docWidth > 0 ? Math.max(clampedLeft + 1, Math.min(docWidth, right)) : Math.max(clampedLeft + 1, right);
+  const clampedBottom = docHeight > 0 ? Math.max(clampedTop + 1, Math.min(docHeight, bottom)) : Math.max(clampedTop + 1, bottom);
+  return {
+    left: clampedLeft,
+    top: clampedTop,
+    right: clampedRight,
+    bottom: clampedBottom,
+    width: clampedRight - clampedLeft,
+    height: clampedBottom - clampedTop,
+  };
+}
+
+function formatSemanticSplitRegion(region) {
+  if (!region) return "";
+  return `${region.left},${region.top},${region.width || Math.max(1, region.right - region.left)}x${region.height || Math.max(1, region.bottom - region.top)}`;
+}
+
 function normalizeSemanticSplitTargets(elements) {
   if (!Array.isArray(elements)) return [];
 
   const seen = new Set();
   return elements
     .map((item, index) => {
-      const label = String(item?.label || "").trim().slice(0, 24) || `元素${index + 1}`;
+      const label = cleanSemanticSplitLabel(item?.label, `元素${index + 1}`);
       const target = String(item?.target || item?.label || "").trim();
-      return { label, target };
+      const groupLabel = String(item?.groupLabel || "").trim();
+      const groupDescription = String(item?.groupDescription || "").trim();
+      const region = normalizeSemanticSplitRegion(item?.region, null);
+      return { label, target, groupLabel, groupDescription, region };
     })
     .filter((item) => item.target.length >= 2)
     .filter((item) => {
-      const key = item.label.toLowerCase();
+      const key = `${item.groupLabel}|${item.label}|${item.target.slice(0, 96)}`.toLowerCase();
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -2321,6 +2642,7 @@ function normalizeSemanticSplitTargets(elements) {
 
 async function requestSemanticSplitLayers(settings, imageB64, docSize, targets) {
   const results = [];
+  const skipped = [];
   const total = Math.max(1, targets.length);
 
   for (let index = 0; index < total; index += 1) {
@@ -2328,10 +2650,17 @@ async function requestSemanticSplitLayers(settings, imageB64, docSize, targets) 
     setProgress(45 + Math.round((index / total) * 36), true);
     setStatus(`正在用 gpt-image-2 抽取拆图层 ${index + 1}/${total}：${target.label}`);
     const prompt = buildSemanticSplitLayerPrompt(target, index, total, docSize);
-    const batch = await requestEdits(settings, prompt, imageB64, null, { size: "auto" });
-    const item = await normalizeSemanticSplitLayerItem(batch[0], docSize, target.label, index + 1);
-    if (item) {
-      results.push(item);
+    try {
+      await settleBeforeSemanticSplitLayerRequest(settings, index);
+      const batch = await requestSemanticSplitLayerBatchWithRetry(settings, prompt, imageB64, target, index, total);
+      const item = await normalizeSemanticSplitLayerItem(batch[0], docSize, target.label, index + 1, settings);
+      if (item) {
+        results.push(item);
+      }
+    } catch (error) {
+      console.warn(`[split] skipped layer ${index + 1}/${total} ${target.label}`, error);
+      skipped.push({ target, error });
+      setStatus(`拆图层「${target.label}」失败，已跳过并继续后面的元素...`);
     }
   }
 
@@ -2339,10 +2668,90 @@ async function requestSemanticSplitLayers(settings, imageB64, docSize, targets) 
     setStatus("语义拆图没有得到有效图层，正在尝试整体白底拆分...");
     const fallbackPrompt = buildSplitImagePrompt(targets.map((target) => target.label).join("，"));
     const fallback = await requestEdits(settings, fallbackPrompt, imageB64, null, { size: "auto" });
+    if (settings?.koukoutuApiKey) {
+      const fallbackB64 = await createSemanticSplitWhiteCanvasBase64(fallback[0], docSize, "整体拆图结果");
+      setStatus("正在用抠抠图透明化整体拆图结果...");
+      return splitGeneratedImageIntoElementItems(await requestKoukoutuCutout(settings, fallbackB64), docSize);
+    }
     return splitGeneratedImageIntoElementItems(fallback[0], docSize);
   }
 
+  if (skipped.length) {
+    console.warn(`[split] completed with ${results.length} layer(s), skipped ${skipped.length} failed target(s)`);
+    setStatus(`拆图已得到 ${results.length} 个图层；${skipped.length} 个元素请求失败已跳过`);
+  }
+
   return results;
+}
+
+function scaleSemanticSplitItemToDocument(item, sourceSize, targetRect) {
+  if (!item) return item;
+  const sourceWidth = Math.max(1, Math.round(toNumber(sourceSize?.width) || toNumber(targetRect?.width) || 1));
+  const sourceHeight = Math.max(1, Math.round(toNumber(sourceSize?.height) || toNumber(targetRect?.height) || 1));
+  const splitBounds = item.splitBounds
+    ? roundRectToPixels(mapImageRectToDocumentRect(item.splitBounds, targetRect, sourceWidth, sourceHeight))
+    : null;
+  const importVisibleRect = item.importVisibleRect
+    ? roundRectToPixels(mapImageRectToDocumentRect(item.importVisibleRect, targetRect, sourceWidth, sourceHeight))
+    : splitBounds;
+  return {
+    ...item,
+    splitBounds: splitBounds || item.splitBounds || null,
+    importVisibleRect: importVisibleRect || item.importVisibleRect || null,
+    targetRect,
+    placementRect: targetRect,
+  };
+}
+
+async function requestSemanticSplitLayerBatchWithRetry(settings, prompt, imageB64, target, index, total) {
+  const maxAttempts = 1 + SEMANTIC_SPLIT_TRANSIENT_RETRY_DELAYS_MS.length;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      if (attempt > 1) {
+        setStatus(`拆图层 ${index + 1}/${total}「${target.label}」上游断流，正在重试 ${attempt}/${maxAttempts}...`);
+      }
+      return await requestEdits(settings, prompt, imageB64, null, { size: "auto" });
+    } catch (error) {
+      lastError = error;
+      if (!isTransientSemanticSplitLayerError(error) || attempt >= maxAttempts) {
+        throw error;
+      }
+      const delayMs = SEMANTIC_SPLIT_TRANSIENT_RETRY_DELAYS_MS[attempt - 1] || 2000;
+      console.warn(`[split] transient layer request failure; retrying ${attempt + 1}/${maxAttempts}`, error);
+      await delay(delayMs);
+    }
+  }
+
+  throw lastError || new Error("拆图层请求失败");
+}
+
+async function settleBeforeSemanticSplitLayerRequest(settings, index) {
+  if (index <= 0) return;
+  if (!isCodexSidecarBaseUrl(settings?.baseUrl)) return;
+  await delay(SEMANTIC_SPLIT_SIDECAR_SETTLE_DELAY_MS);
+}
+
+function isTransientSemanticSplitLayerError(error) {
+  const status = Number(error?.status || error?.response?.status || 0);
+  const message = String(error?.message || error?.responseText || error || "").toLowerCase();
+  return status === 408 ||
+    status === 409 ||
+    status === 425 ||
+    status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    /http\s+(?:408|409|425|429|500|502|503|504)\b|eof|upstream_error|upstream error|gateway|timeout|timed out|temporarily unavailable|network.*fail|load failed|connection.*reset|socket.*hang/.test(message);
+}
+
+function delay(ms) {
+  const setTimer = typeof window !== "undefined" && window.setTimeout
+    ? window.setTimeout.bind(window)
+    : globalThis.setTimeout.bind(globalThis);
+  return new Promise((resolve) => setTimer(resolve, Math.max(0, Number(ms) || 0)));
 }
 
 function buildSemanticSplitLayerPrompt(target, index, total, docSize = null) {
@@ -2351,17 +2760,23 @@ function buildSemanticSplitLayerPrompt(target, index, total, docSize = null) {
   const height = Math.max(1, Math.round(docSize?.height || 0));
   return [
     "You are extracting one semantic Photoshop layer from the input image.",
+    "This should look like a careful manual PSD layer separation, not a rough crop.",
     `Layer ${index + 1} of ${total}: ${target.label}.`,
+    target.groupLabel ? `Large block context: ${target.groupLabel}${target.groupDescription ? ` (${target.groupDescription})` : ""}.` : "",
+    target.region ? `Focus on this approximate original-canvas block region first: ${formatSemanticSplitRegion(target.region)}.` : "",
     `Extract ONLY this target: ${target.target}.`,
     width && height
       ? `Return a full-canvas PNG exactly ${width}x${height} pixels, matching the input canvas size.`
       : "Return a full-canvas PNG with the exact same pixel size as the input image.",
-    "Keep the extracted target at the original Photoshop canvas coordinates, with a plain white matte everywhere else.",
+    "Keep the extracted target at the original Photoshop canvas coordinates, with a pure #FFFFFF white matte everywhere else.",
+    "Do not make the background transparent yourself; return the target on clean white so the next Koukoutu background-removal step can create the alpha matte.",
     "Keep the extracted target at its original position, original scale, original shape, original colors, and original style.",
+    "Preserve anti-aliased edges, transparency-like softness, texture, tiny markings, highlights, and shadows that belong to this exact target.",
     isBaseLayer
       ? "This is a base/background/frame layer: remove foreground icons, text, buttons, badges, and labels from this layer, then reconstruct the hidden surface/texture underneath so the panel is continuous and has no holes."
       : "",
     "Everything that is not this target must be plain white matte.",
+    "Do not include neighboring touching elements, separate accessories, other body parts, text, labels, UI pieces, or background/base pixels unless they are explicitly part of this target.",
     "Do not crop, trim empty matte pixels, recenter, enlarge, move, relabel, add guides, add boxes, add text, or create a contact sheet.",
     isBaseLayer
       ? "Only redraw/inpaint the covered base surface where foreground elements were removed; do not invent new decorations."
@@ -2373,9 +2788,10 @@ function buildSemanticSplitLayerPrompt(target, index, total, docSize = null) {
 function isSemanticBaseLayer(target) {
   const label = String(target?.label || "").toLowerCase();
   const description = String(target?.target || "").toLowerCase();
+  const combined = `${label} ${description}`;
   const nonBasePattern = /fill|progress|health|energy|bar only|text|number|glyph|badge|plate|icon|button|填充|进度|血条|红色条|文字|数字|徽章|图标|按钮|牌/;
 
-  if (/底框|外框|底板|背景|面板|边框|纸面|画板|base|background|frame|panel|container|surface|card|parchment|shell/.test(label)) {
+  if (/底框|外框|底板|背景|面板|边框|纸面|画板|框体|横幅底|排行面板|奖励面板|按钮底|按钮框|按钮面|base|background|frame|panel|container|surface|card|parchment|shell|button base|button plate|button surface|clean base|clean surface/.test(combined)) {
     return true;
   }
 
@@ -4923,8 +5339,11 @@ async function splitGeneratedImageIntoElementItems(sourceItem, docSize) {
   });
 }
 
-async function normalizeSemanticSplitLayerItem(sourceItem, docSize, label, splitIndex) {
+async function normalizeSemanticSplitLayerItem(sourceItem, docSize, label, splitIndex, settings = null) {
   if (!sourceItem) return null;
+  if (settings?.koukoutuApiKey) {
+    return normalizeSemanticSplitLayerItemWithKoukoutu(settings, sourceItem, docSize, label, splitIndex);
+  }
 
   let source;
   try {
@@ -4974,9 +5393,120 @@ async function normalizeSemanticSplitLayerItem(sourceItem, docSize, label, split
       width: bounds.width,
       height: bounds.height,
     },
+    importVisibleRect: {
+      left: bounds.left,
+      top: bounds.top,
+      right: bounds.right,
+      bottom: bounds.bottom,
+      width: bounds.width,
+      height: bounds.height,
+    },
     targetRect: fullRect,
     placementRect: fullRect,
   };
+}
+
+async function normalizeSemanticSplitLayerItemWithKoukoutu(settings, sourceItem, docSize, label, splitIndex) {
+  const whiteCanvasB64 = await createSemanticSplitWhiteCanvasBase64(sourceItem, docSize, label);
+  setStatus(`正在用抠抠图透明化拆图层 ${splitIndex}：${label}...`);
+  const cutoutItem = await requestKoukoutuCutout(settings, whiteCanvasB64);
+  let source;
+  try {
+    source = await imageItemToCanvasRgba(cutoutItem, docSize, label);
+  } catch (error) {
+    if (error?.unsafeCanvasSize) throw error;
+    console.warn(`[split] Koukoutu result decode failed for ${label}`, error);
+    throw new Error(`抠抠图拆图结果「${label || splitIndex || ""}」无法解码：${error.message || error}`);
+  }
+
+  const { width, height, rgba } = source;
+  const bounds = getAlphaBounds(rgba, width, height, SPLIT_ALPHA_THRESHOLD);
+  if (!bounds) return null;
+  if (looksLikeUncutWhiteMatte(rgba, width, height, bounds)) {
+    throw new Error(`抠抠图没有移除拆图层「${label || splitIndex || ""}」的白底，已跳过以避免把白底整层放回 Photoshop`);
+  }
+  const minArea = Math.max(80, Math.floor(width * height * 0.00008));
+  if (bounds.width * bounds.height < minArea) return null;
+
+  const fullRect = {
+    left: 0,
+    top: 0,
+    right: docSize?.width || width,
+    bottom: docSize?.height || height,
+    width: docSize?.width || width,
+    height: docSize?.height || height,
+  };
+  const normalizedB64 = bytesToBase64(encodePngRgba(width, height, rgba));
+
+  return {
+    b64: normalizedB64,
+    importB64: normalizedB64,
+    format: "png",
+    splitIndex,
+    splitLabel: label,
+    splitBounds: {
+      left: bounds.left,
+      top: bounds.top,
+      right: bounds.right,
+      bottom: bounds.bottom,
+      width: bounds.width,
+      height: bounds.height,
+    },
+    importVisibleRect: {
+      left: bounds.left,
+      top: bounds.top,
+      right: bounds.right,
+      bottom: bounds.bottom,
+      width: bounds.width,
+      height: bounds.height,
+    },
+    targetRect: fullRect,
+    placementRect: fullRect,
+    koukoutuMatte: true,
+    skipPreviewCrop: false,
+  };
+}
+
+async function createSemanticSplitWhiteCanvasBase64(sourceItem, docSize, label) {
+  let source;
+  try {
+    source = await imageItemToCanvasRgba(sourceItem, docSize, label);
+  } catch (error) {
+    if (error?.unsafeCanvasSize) throw error;
+    console.warn(`[split] image decode failed for ${label}; refusing unsafe full-canvas placement`, error);
+    throw new Error(`拆图结果「${label || ""}」无法解码，已停止导入以避免把未透明化的整张结果放回 Photoshop：${error.message || error}`);
+  }
+  return bytesToBase64(encodePngRgba(source.width, source.height, source.rgba));
+}
+
+function looksLikeUncutWhiteMatte(rgba, width, height, bounds) {
+  if (!bounds) return false;
+  const coversCanvas = bounds.width >= width * 0.96 && bounds.height >= height * 0.96;
+  if (!coversCanvas) return false;
+  const sample = Math.max(3, Math.min(16, Math.floor(Math.min(width, height) / 20)));
+  let whiteOpaque = 0;
+  let count = 0;
+  const samplePixel = (x, y) => {
+    const offset = (y * width + x) * 4;
+    count += 1;
+    if (
+      rgba[offset + 3] > 245 &&
+      rgba[offset] > 245 &&
+      rgba[offset + 1] > 245 &&
+      rgba[offset + 2] > 245
+    ) {
+      whiteOpaque += 1;
+    }
+  };
+  for (let y = 0; y < sample; y += 1) {
+    for (let x = 0; x < sample; x += 1) {
+      samplePixel(x, y);
+      samplePixel(width - 1 - x, y);
+      samplePixel(x, height - 1 - y);
+      samplePixel(width - 1 - x, height - 1 - y);
+    }
+  }
+  return count > 0 && whiteOpaque / count > 0.85;
 }
 
 async function imageItemToRgba(item, targetSize = null) {
@@ -5383,9 +5913,9 @@ async function importSelected() {
     }
     const directSelectionPatch = isDirectSelectionPatchResult(itemToPlace);
     await placeResultAsLayer(itemToPlace, placementRect, layerName, needsPostImportMask ? cropRectToPlace : null, {
-      fitByImageSize: isMaskedInpaintLayerResult(itemToPlace) || directSelectionPatch,
-      alignVisibleRect: isMaskedInpaintLayerResult(itemToPlace),
-      preserveImageAspect: item.mode === "cutout" || item.mode === "outpaint" || isSplitElement || item.placementMode === "full-region-patch",
+      fitByImageSize: isMaskedInpaintLayerResult(itemToPlace) || directSelectionPatch || isSplitElement,
+      alignVisibleRect: isMaskedInpaintLayerResult(itemToPlace) || isSplitElement,
+      preserveImageAspect: item.mode === "cutout" || item.mode === "outpaint" || item.placementMode === "full-region-patch",
       rasterizeBeforeMask: needsPostImportMask,
       useCurrentSelectionMask: false,
       selectionChannelName: needsPostImportMask ? (item.selectionChannelName || null) : null,
