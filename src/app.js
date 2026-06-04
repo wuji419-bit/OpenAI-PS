@@ -8,7 +8,7 @@ const imaging = photoshop.imaging;
 const constants = photoshop.constants || {};
 const fs = storage.localFileSystem;
 const PLUGIN_ID = "com.local.openai.photoshop.generator";
-const PLUGIN_VERSION = "0.1.292";
+const PLUGIN_VERSION = "0.1.293";
 
 entrypoints.setup({
   panels: {
@@ -3178,6 +3178,9 @@ function buildResponsesImageEditPrompt(prompt, hasMask, options = {}) {
       referenceSize,
       referenceCanvasSize,
       referenceCropBox,
+      "The selected crop is a fixed Photoshop coordinate grid: keep the original crop edges, top-left origin, internal object positions, and scale locked to that grid.",
+      "不要把结果整体上移、下移、左移或右移；选区边缘、按钮、图标、文字基线、纹理和未点名元素必须和原截图坐标对齐。",
+      "For UI/game screenshot edits, do not rebuild a new UI strip on a plain white canvas. Preserve the original background and unchanged UI layout at the same pixel positions, then apply only the named removal/change.",
       "用户文字是唯一编辑规格：只处理被明确点名要改变或移除的区域；任何被说成不变、不要动、保持、保留的对象都是受保护参考。",
       "The user's text is the only edit specification: change or remove only the explicitly named target. Anything described as unchanged, do not touch, preserve, keep, or stay the same is protected reference content.",
       "The uploaded image is the selected Photoshop crop itself on a white matte. Treat the crop edges as the exact composition boundary.",
@@ -7205,15 +7208,20 @@ function fitScreenshotResultToSelectionCropBase64(decoded, crop) {
   if (Math.abs(Math.log(resultRatio / cropRatio)) > 0.002) {
     if (resultRatio > cropRatio) {
       sourceWidth = Math.max(1, Math.round(resultHeight * cropRatio));
-      sourceLeft = Math.max(0, Math.floor((resultWidth - sourceWidth) / 2));
     } else {
       sourceHeight = Math.max(1, Math.round(resultWidth / cropRatio));
-      sourceTop = Math.max(0, Math.floor((resultHeight - sourceHeight) / 2));
     }
+    const fitCrop = getScreenshotResultContentAwareFitCrop(decoded, crop, sourceWidth, sourceHeight);
+    sourceLeft = fitCrop.left;
+    sourceTop = fitCrop.top;
+    sourceWidth = fitCrop.width;
+    sourceHeight = fitCrop.height;
     console.warn("[inpaint] fitting mismatched screenshot result to selection", JSON.stringify({
       result: `${resultWidth}x${resultHeight}`,
       selection: `${cropWidth}x${cropHeight}`,
       sourceCrop: `${sourceLeft},${sourceTop},${sourceWidth}x${sourceHeight}`,
+      strategy: fitCrop.strategy,
+      resultContentBounds: fitCrop.resultContentBounds,
     }));
   }
 
@@ -7231,6 +7239,104 @@ function fitScreenshotResultToSelectionCropBase64(decoded, crop) {
     }
   }
   return bytesToBase64(encodePngRgba(cropWidth, cropHeight, output));
+}
+
+function getScreenshotResultContentAwareFitCrop(decoded, crop, sourceWidth, sourceHeight) {
+  const resultWidth = Math.max(1, Math.round(decoded?.width || 1));
+  const resultHeight = Math.max(1, Math.round(decoded?.height || 1));
+  const cropWidth = Math.max(1, Math.round(crop?.width || 1));
+  const cropHeight = Math.max(1, Math.round(crop?.height || 1));
+  let sourceLeft = Math.max(0, Math.floor((resultWidth - sourceWidth) / 2));
+  let sourceTop = Math.max(0, Math.floor((resultHeight - sourceHeight) / 2));
+  let strategy = "center";
+  const resultContentBounds = findNonWhiteRgbaBounds(decoded?.rgba, resultWidth, resultHeight);
+  if (!resultContentBounds) {
+    return { left: sourceLeft, top: sourceTop, width: sourceWidth, height: sourceHeight, strategy, resultContentBounds: null };
+  }
+
+  const referenceContentBounds = normalizeScreenshotContentBounds(crop?.sourceContentBounds, cropWidth, cropHeight);
+  const desiredCenterX = getScreenshotContentCenterRatio(referenceContentBounds, cropWidth, "x");
+  const desiredCenterY = getScreenshotContentCenterRatio(referenceContentBounds, cropHeight, "y");
+
+  if (sourceWidth < resultWidth) {
+    const nextLeft = alignScreenshotFitStartToContent(
+      sourceLeft,
+      sourceWidth,
+      resultWidth,
+      resultContentBounds.left,
+      resultContentBounds.right,
+      desiredCenterX
+    );
+    if (Math.abs(nextLeft - sourceLeft) > 0) strategy = "content-aware";
+    sourceLeft = nextLeft;
+  }
+
+  if (sourceHeight < resultHeight) {
+    const nextTop = alignScreenshotFitStartToContent(
+      sourceTop,
+      sourceHeight,
+      resultHeight,
+      resultContentBounds.top,
+      resultContentBounds.bottom,
+      desiredCenterY
+    );
+    if (Math.abs(nextTop - sourceTop) > 0) strategy = "content-aware";
+    sourceTop = nextTop;
+  }
+
+  return {
+    left: sourceLeft,
+    top: sourceTop,
+    width: sourceWidth,
+    height: sourceHeight,
+    strategy,
+    resultContentBounds: roundRectToPixels(resultContentBounds),
+  };
+}
+
+function normalizeScreenshotContentBounds(bounds, width, height) {
+  if (!bounds) return null;
+  const imageWidth = Math.max(1, Math.round(width || 1));
+  const imageHeight = Math.max(1, Math.round(height || 1));
+  const rawLeft = toNumber(bounds.left);
+  const rawTop = toNumber(bounds.top);
+  const rawRight = toNumber(bounds.right);
+  const rawBottom = toNumber(bounds.bottom);
+  if (![rawLeft, rawTop, rawRight, rawBottom].every(Number.isFinite)) return null;
+  const left = Math.max(0, Math.min(imageWidth, Math.floor(rawLeft)));
+  const top = Math.max(0, Math.min(imageHeight, Math.floor(rawTop)));
+  const right = Math.max(left, Math.min(imageWidth, Math.ceil(rawRight)));
+  const bottom = Math.max(top, Math.min(imageHeight, Math.ceil(rawBottom)));
+  if (right <= left || bottom <= top) return null;
+  return { left, top, right, bottom, width: right - left, height: bottom - top };
+}
+
+function getScreenshotContentCenterRatio(bounds, imageSize, axis) {
+  const size = Math.max(1, Math.round(imageSize || 1));
+  if (!bounds) return 0.5;
+  const center = axis === "x"
+    ? (toNumber(bounds.left) + toNumber(bounds.right)) / 2
+    : (toNumber(bounds.top) + toNumber(bounds.bottom)) / 2;
+  if (!Number.isFinite(center)) return 0.5;
+  return Math.max(0, Math.min(1, center / size));
+}
+
+function alignScreenshotFitStartToContent(currentStart, sourceSize, resultSize, contentStart, contentEnd, desiredCenterRatio) {
+  const size = Math.max(1, Math.round(sourceSize || 1));
+  const limit = Math.max(size, Math.round(resultSize || size));
+  const maxStart = Math.max(0, limit - size);
+  if (maxStart <= 0) return 0;
+  const start = Math.max(0, Math.min(limit, Math.floor(toNumber(contentStart))));
+  const end = Math.max(start, Math.min(limit, Math.ceil(toNumber(contentEnd))));
+  if (end <= start) return Math.max(0, Math.min(maxStart, Math.round(currentStart || 0)));
+
+  const contentCenter = (start + end) / 2;
+  let nextStart = contentCenter - Math.max(0, Math.min(1, desiredCenterRatio)) * size;
+  if (end - start <= size) {
+    if (start < nextStart) nextStart = start;
+    if (end > nextStart + size) nextStart = end - size;
+  }
+  return Math.max(0, Math.min(maxStart, Math.round(nextStart)));
 }
 
 function shouldKeepScreenshotResultWithoutCrop(decoded, crop) {

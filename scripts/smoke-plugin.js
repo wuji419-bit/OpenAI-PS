@@ -642,6 +642,8 @@ async function runVmSmoke() {
       assert(screenshotResponsesPrompt.startsWith("把中间的手去掉，弓不要变"), "Screenshot reference edit should send the user's instruction first");
       assert(!/2D game-icon style/.test(screenshotResponsesPrompt), "Screenshot reference edit prompt should not force a game-icon style");
       assert(/Do not crop, zoom, resize, shrink, recenter, or rotate/.test(screenshotResponsesPrompt), "Screenshot reference edit prompt should protect framing and margins");
+      assert(screenshotResponsesPrompt.includes("fixed Photoshop coordinate grid") && screenshotResponsesPrompt.includes("不要把结果整体上移"), "Screenshot reference edit prompt should lock Photoshop crop coordinates against whole-result drift");
+      assert(screenshotResponsesPrompt.includes("do not rebuild a new UI strip") && screenshotResponsesPrompt.includes("same pixel positions"), "Screenshot reference edit prompt should prevent shifted UI redraws on a white canvas");
       assert(screenshotResponsesPrompt.includes("visible footprint and bounding box") && screenshotResponsesPrompt.includes("do not make it occupy less of the crop"), "Screenshot reference edit prompt should forbid protected object shrinkage");
       assert(screenshotResponsesPrompt.includes("没有被点名要改的可见线条") && screenshotResponsesPrompt.includes("Do not redraw visible protected pixels"), "Screenshot reference edit prompt should explicitly protect visible unchanged pixels");
       assert(screenshotResponsesPrompt.includes("只补全遮挡物下面缺失的部分"), "Screenshot reference edit prompt should only reconstruct hidden pixels under the removed occluder");
@@ -660,6 +662,31 @@ async function runVmSmoke() {
       assert(genericObjectResponsesPrompt.includes("完整可见形状") && genericObjectResponsesPrompt.includes("complete visible shape"), "Generic screenshot edit prompt should use the same complete-target rules for arbitrary objects");
       assert(genericObjectResponsesPrompt.includes("受保护参考") && genericObjectResponsesPrompt.includes("protected reference content"), "Generic screenshot edit prompt should protect arbitrary objects the user says stay unchanged");
       assert(!genericObjectResponsesPrompt.includes("把中间的手去掉") && !genericObjectResponsesPrompt.includes("弓不要变"), "Generic screenshot edit prompt must not reuse the bow/hand test instruction");
+      const shiftedCanvasPixels = new Uint8Array(1200 * 500 * 4).fill(255);
+      for (let y = 60; y < 190; y += 1) {
+        for (let x = 100; x < 1100; x += 1) {
+          const offset = (y * 1200 + x) * 4;
+          shiftedCanvasPixels[offset] = 72;
+          shiftedCanvasPixels[offset + 1] = 48;
+          shiftedCanvasPixels[offset + 2] = 24;
+          shiftedCanvasPixels[offset + 3] = 255;
+        }
+      }
+      const shiftedCanvasB64 = bytesToBase64(encodePngRgba(1200, 500, shiftedCanvasPixels));
+      const fittedSelectionB64 = await cropPaddedScreenshotResultBase64(shiftedCanvasB64, {
+        canvasWidth: 598,
+        canvasHeight: 125,
+        left: 0,
+        top: 0,
+        width: 598,
+        height: 125,
+        sourceContentBounds: { left: 0, top: 0, right: 598, bottom: 125, width: 598, height: 125 },
+      });
+      const fittedSelection = await decodePngRgbaBase64(fittedSelectionB64);
+      const fittedBounds = findNonWhiteRgbaBounds(fittedSelection.rgba, fittedSelection.width, fittedSelection.height);
+      const fittedCenterY = ((fittedBounds.top + fittedBounds.bottom) / 2) / fittedSelection.height;
+      assert(fittedSelection.width === 598 && fittedSelection.height === 125, "Mismatched screenshot repaint result should normalize to the original selected crop size");
+      assert(fittedCenterY > 0.42 && fittedCenterY < 0.58, "Mismatched screenshot repaint fitting should content-align shifted tall canvases instead of center-cropping useful pixels to the top");
       const savedSendRequest = sendRequest;
       const savedDebugJsonFileForResponses = saveDebugJsonFile;
       let capturedResponsesUrl = "";

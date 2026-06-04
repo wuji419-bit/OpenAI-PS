@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.293] - 2026-06-04
+
+### Changed
+
+- Strengthened selection repaint prompts so screenshot/UI edits explicitly lock the original Photoshop crop grid, element coordinates, and background layout instead of rebuilding a shifted strip on white.
+- Changed mismatched selection repaint result fitting from blind center-crop to content-aware crop-window selection, so tall/wide returned canvases are normalized back to the original selected region without shifting useful content upward or sideways.
+
 ## [0.1.292] - 2026-06-04
 
 ### Changed
