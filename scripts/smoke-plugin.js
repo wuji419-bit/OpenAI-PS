@@ -28,12 +28,9 @@ function checkManifest() {
   assert(manifest.main === "index.html", "Unexpected manifest entrypoint");
   assert(manifest.entrypoints?.[0]?.id === "openaiPanel", "Missing openaiPanel entrypoint");
   assert(manifest.entrypoints?.[0]?.icons?.[0]?.path === "assets/panel.png", "Panel icon path must be scale-base path");
-  assert(manifest.entrypoints?.some((entry) => entry.id === "openaiOpenPanel" && entry.type === "command"), "Missing open panel command");
-  assert(manifest.entrypoints?.some((entry) => entry.id === "openaiRunSmoke" && entry.type === "command"), "Missing six-mode smoke command");
-  assert(manifest.entrypoints?.some((entry) => entry.id === "openaiRunSplitSmoke" && entry.type === "command"), "Missing split smoke command");
-  assert(manifest.entrypoints?.some((entry) => entry.id === "openaiRunMouthInpaintSmoke" && entry.type === "command"), "Missing mouth inpaint smoke command");
-  assert(manifest.entrypoints?.some((entry) => entry.id === "openaiImportApiKeyFromClipboard" && entry.type === "command"), "Missing clipboard API key import command");
-  assert(manifest.requiredPermissions?.ipc?.enablePluginCommunication === true, "Panel command needs ipc plugin communication permission");
+  const commandEntryIds = (manifest.entrypoints || []).filter((entry) => entry.type === "command").map((entry) => entry.id);
+  assert(commandEntryIds.length === 0, `Unexpected visible command menu entries: ${commandEntryIds.join(", ")}`);
+  assert(!/commands\s*:/.test(appJs), "entrypoints.setup should not register visible command menu handlers");
   assert(manifest.icons?.[0]?.path === "assets/plugin.png", "Plugin icon path must be scale-base path");
   for (const file of ["panel@1x.png", "panel@2x.png", "plugin@1x.png", "plugin@2x.png"]) {
     assert(fs.existsSync(`${root}/assets/${file}`), `Missing icon asset: ${file}`);
@@ -152,10 +149,8 @@ function checkUiBindings() {
 
 function checkSmokeCommandCompatibility() {
   assert(!appJs.includes("openaiRunOfflineDiagnostics:"), "Do not register new diagnostics command; cached Photoshop manifests reject it");
-  assert(
-    /openaiRunSmoke:\s*{[\s\S]*?runOfflineSixModeDiagnostics\(\)/.test(appJs),
-    "Existing smoke command should invoke offline diagnostics for cached-manifest compatibility"
-  );
+  assert(!/openaiRunSmoke:\s*{/.test(appJs), "Diagnostics should not be exposed as a Photoshop command menu entry");
+  assert(appJs.includes("runOfflineSixModeDiagnostics"), "Offline diagnostics helper should remain available for script-based smoke coverage");
 }
 
 function checkRuntimeReloadScript() {

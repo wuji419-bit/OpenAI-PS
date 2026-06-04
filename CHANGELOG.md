@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.292] - 2026-06-04
+
+### Changed
+
+- Removed the extra Photoshop plugin menu commands for opening the panel, offline smoke diagnostics, split smoke, mouth inpaint smoke, and clipboard API key import. The Photoshop plugin menu now exposes only the normal `OpenAI 图片` panel entry.
+
 ## [0.1.291] - 2026-05-31
 
 ### Changed

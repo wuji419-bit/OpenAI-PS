@@ -1,5 +1,5 @@
 const photoshop = require("photoshop");
-const { entrypoints, pluginManager, storage } = require("uxp");
+const { entrypoints, storage } = require("uxp");
 
 const app = photoshop.app;
 const action = photoshop.action;
@@ -8,7 +8,7 @@ const imaging = photoshop.imaging;
 const constants = photoshop.constants || {};
 const fs = storage.localFileSystem;
 const PLUGIN_ID = "com.local.openai.photoshop.generator";
-const PLUGIN_VERSION = "0.1.291";
+const PLUGIN_VERSION = "0.1.292";
 
 entrypoints.setup({
   panels: {
@@ -21,69 +21,7 @@ entrypoints.setup({
       },
     },
   },
-  commands: {
-    openaiOpenPanel: {
-      async run() {
-        console.log("[OpenAI Photoshop Generator] openaiOpenPanel command");
-        await showOpenAiPanel();
-      },
-    },
-    openaiRunSmoke: {
-      async run() {
-        console.log("[OpenAI Photoshop Generator] openaiRunSmoke command (offline diagnostics)");
-        await runOfflineSixModeDiagnostics();
-      },
-    },
-    openaiRunSplitSmoke: {
-      async run() {
-        console.log("[OpenAI Photoshop Generator] openaiRunSplitSmoke command");
-        await runModeSmoke("split", "头发");
-      },
-    },
-    openaiRunMouthInpaintSmoke: {
-      async run() {
-        console.log("[OpenAI Photoshop Generator] openaiRunMouthInpaintSmoke command");
-        await runMouthInpaintSmoke();
-      },
-    },
-    openaiImportApiKeyFromClipboard: {
-      async run() {
-        console.log("[OpenAI Photoshop Generator] openaiImportApiKeyFromClipboard command");
-        await importApiKeyFromClipboard();
-      },
-    },
-  },
 });
-
-async function showOpenAiPanel() {
-  const panelId = "openaiPanel";
-  try {
-    const plugins = [];
-    const directPlugin = pluginManager?.getPlugin?.(PLUGIN_ID);
-    if (directPlugin) plugins.push(directPlugin);
-    if (pluginManager?.plugins) {
-      plugins.push(...Array.from(pluginManager.plugins).filter((plugin) => plugin?.id === PLUGIN_ID));
-    }
-
-    for (const plugin of plugins) {
-      if (plugin && typeof plugin.showPanel === "function") {
-        await plugin.showPanel(panelId);
-        console.log("[OpenAI Photoshop Generator] showPanel via plugin object");
-        return true;
-      }
-    }
-
-    if (pluginManager && typeof pluginManager.showPanel === "function") {
-      await pluginManager.showPanel(panelId);
-      console.log("[OpenAI Photoshop Generator] showPanel via pluginManager");
-      return true;
-    }
-  } catch (error) {
-    console.warn("[OpenAI Photoshop Generator] show panel failed", error);
-  }
-
-  return false;
-}
 
 const HISTORY_KEY = "openaiPhotoshop.history.v1";
 const SETTINGS_KEY = "openaiPhotoshop.settings.v1";
