@@ -1,11 +1,14 @@
 # OpenAI Photoshop Generator
 
+当前版本：**v0.1.297**
+
 这是一个从零写的轻量版 Photoshop UXP 插件，目标是在 Photoshop 里直接完成 OpenAI 图像生成、局部重绘、扩图、拆图，以及通过抠抠图 API 做透明 PNG 抠图。
 
 ## 当前功能
 
 - 文生图：输入提示词生成图片。
 - 参考图编辑：把当前 Photoshop 画布导出为参考图，再交给 OpenAI 编辑。
+- 双图风格参考：参考图模式可额外选择“图二”；当前 Photoshop 画布或选区作为图一，通过用户自己运行的外部 ComfyUI GPT Image2 Alpha 工作流处理。
 - 选区重绘：读取当前 Photoshop 选区边界，导出白底截图参考图，通过 `/responses` 图像工具按普通上传图片编辑；正常大小的选区直接上传原始白底截图，只对极小选区补最小白边；不把选区作为 API mask 发送，返回后再按原选区放回新图层。
 - 扩图：按上、下、左、右边距生成扩图输入和 mask。
 - 抠图：把当前画布或选区上传到抠抠图同步接口，返回透明 PNG/WebP，并自动放回原位置成为新图层。
@@ -126,12 +129,13 @@ https://sync.koukoutu.com/v1/create
 
 需要在插件设置里填写抠抠图 `X-API-Key`。插件会固定使用 `crop=0`，让返回图保持原画布或原选区尺寸，避免放回 Photoshop 时发生偏移。
 
-仓库内仍保留 ComfyUI workflow 作为远程实验素材：
+仓库内保留的是用于连接外部服务的 ComfyUI workflow 描述文件。插件不内置 ComfyUI 程序、模型或自定义节点：
 
 - `comfyui-workflows/codex_basic_inpaint_masklock_api.json`
 - `comfyui-workflows/codex_sdxl_inpaint_masklock_api.json`
 - `comfyui-workflows/codex_flux_fill_inpaint_masklock_api.json`
 - `comfyui-workflows/codex_transparent_png_effect_composite_api.json`
+- `comfyui-workflows/codex_gpt_image2_alpha_api.json`
 
 远程机器安装和校验说明在 `comfyui-remote-setup/`。
 

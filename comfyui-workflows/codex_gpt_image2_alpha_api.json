@@ -1,0 +1,129 @@
+{
+  "2": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "codex_ps_gpt_image2_alpha_image2.png"
+    },
+    "_meta": {
+      "title": "image2"
+    }
+  },
+  "14": {
+    "class_type": "Comfly_Haoee_api_key",
+    "inputs": {
+      "apikey": ""
+    }
+  },
+  "15": {
+    "class_type": "Text Concatenate",
+    "inputs": {
+      "text_a": [
+        "17",
+        0
+      ],
+      "text_b": [
+        "16",
+        0
+      ],
+      "text_c": "",
+      "text_d": "",
+      "delimiter": "\n",
+      "clean_whitespace": "true"
+    }
+  },
+  "16": {
+    "class_type": "Text Multiline",
+    "inputs": {
+      "text": "输出背景是50%灰，色号是#808080，不要阴影脏边，不要发光污染，不要模糊，不要改变数量，不要重新排版，不要生成新图标。"
+    },
+    "_meta": {
+      "title": "固定背景词"
+    }
+  },
+  "17": {
+    "class_type": "Text Multiline",
+    "inputs": {
+      "text": "图一是我的特效贴图，帮我把图二的风格元素转移到图一的特效贴图上面，保持图一的剪影、造型和数量，必须还是图一的样式输出，我要拿去做特效用。"
+    },
+    "_meta": {
+      "title": "提示词"
+    }
+  },
+  "19": {
+    "class_type": "ImageScale",
+    "inputs": {
+      "image": [
+        "25",
+        0
+      ],
+      "upscale_method": "lanczos",
+      "width": 0,
+      "height": 3840,
+      "crop": "disabled"
+    }
+  },
+  "20": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "23",
+        0
+      ],
+      "filename_prefix": "codex_ps_gpt_image2_alpha"
+    }
+  },
+  "23": {
+    "class_type": "UI Background Color Alpha",
+    "inputs": {
+      "image": [
+        "19",
+        0
+      ],
+      "background_color": "128,128,128",
+      "tolerance": 0.055,
+      "softness": 0.08,
+      "edge_contract_px": 1,
+      "feather_radius": 1,
+      "decontaminate_edge": true,
+      "refine_scale": 2,
+      "background_mode": "transparent",
+      "background_preset": "gray"
+    }
+  },
+  "24": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "codex_ps_gpt_image2_alpha_image1.png"
+    },
+    "_meta": {
+      "title": "image1"
+    }
+  },
+  "25": {
+    "class_type": "Comfly_HaoeeImage_Gpt_Image2_PerCount",
+    "inputs": {
+      "image1": [
+        "24",
+        0
+      ],
+      "image2": [
+        "2",
+        0
+      ],
+      "image3": null,
+      "image4": null,
+      "prompt": [
+        "15",
+        0
+      ],
+      "model": "gpt-image-2",
+      "size": "1024x1024（1K 1:1）",
+      "api_key": [
+        "14",
+        0
+      ],
+      "response_format": "b64_json",
+      "seed": 482348222
+    }
+  }
+}

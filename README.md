@@ -1,5 +1,7 @@
 # OpenAI Photoshop Generator
 
+Current version: **v0.1.297**
+
 ![OpenAI Photoshop Generator running inside Adobe Photoshop](stitch-reference/photoshop-panel-v0163.png)
 
 OpenAI Photoshop Generator is an open-source Adobe Photoshop UXP plugin built with Codex-assisted development. It focuses on OpenAI image generation and editing workflows inside Photoshop, without carrying over the heavy Stable Diffusion / A1111 / ComfyUI parameter surface.
@@ -10,6 +12,7 @@ The plugin is designed for fast creative loops: generate a draft, use the curren
 
 - Text-to-image generation through the OpenAI Image API.
 - Reference-image editing by exporting the current Photoshop document and sending it to OpenAI edits.
+- Optional two-image style transfer in Reference mode through a separately running external ComfyUI GPT Image2 Alpha workflow.
 - Rectangular-selection repainting with a generated same-size mask.
 - Outpainting by adding top, bottom, left, and right margins before an edit request.
 - Cutout mode for exporting the active canvas or selected region to Koukoutu's synchronous background-removal API and placing the returned transparent PNG back at the original position.
@@ -50,12 +53,13 @@ Endpoint: https://sync.koukoutu.com/v1/create
 Auth header: X-API-Key
 ```
 
-Text-to-image, reference edit, selection repaint, outpaint, and split mode use the configured OpenAI-compatible image endpoints. Bundled ComfyUI workflow files remain in [`comfyui-workflows/`](comfyui-workflows/) for remote setup experiments:
+Text-to-image, normal reference edit, selection repaint, outpaint, and split mode use the configured OpenAI-compatible image endpoints. Workflow descriptor files remain in [`comfyui-workflows/`](comfyui-workflows/) for connecting to a separately installed external ComfyUI service. The plugin does not bundle ComfyUI, models, or custom nodes:
 
 - `codex_basic_inpaint_masklock_api.json`
 - `codex_sdxl_inpaint_masklock_api.json`
 - `codex_flux_fill_inpaint_masklock_api.json`
 - `codex_transparent_png_effect_composite_api.json`
+- `codex_gpt_image2_alpha_api.json`
 
 For selection repainting, the plugin uses the configured Image Edits endpoint such as `/images/edits`.
 

@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.297] - 2026-07-17
+
+### Added
+
+- Added an optional second style-reference image in Reference mode. When selected, the current Photoshop canvas or selection is used as image one and the chosen local file is used as image two.
+- Added an API workflow descriptor for the external ComfyUI GPT Image2 Alpha pipeline. The plugin does not bundle ComfyUI, models, or custom nodes.
+
+### Changed
+
+- Restored the image quality selector with `auto`, `low`, `medium`, and `high` options and forwards the selected quality to supported image requests.
+- Simplified Cutout mode by hiding prompt and quality controls that are not used by the cutout request.
+- External ComfyUI Alpha results are imported back into the original Photoshop selection or canvas region with full-image fitting.
+
+### Security
+
+- The external workflow contains no API key. The configured OpenAI API key is injected only at runtime.
+
 ## [0.1.293] - 2026-06-04
 
 ### Changed

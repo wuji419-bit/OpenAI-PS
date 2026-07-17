@@ -8,7 +8,7 @@ const imaging = photoshop.imaging;
 const constants = photoshop.constants || {};
 const fs = storage.localFileSystem;
 const PLUGIN_ID = "com.local.openai.photoshop.generator";
-const PLUGIN_VERSION = "0.1.293";
+const PLUGIN_VERSION = "0.1.297";
 
 entrypoints.setup({
   panels: {
@@ -31,6 +31,8 @@ const DEFAULT_COMFY_URL = "http://192.168.1.128:8188";
 const KOUKOUTU_SYNC_URL = "https://sync.koukoutu.com/v1/create";
 const DEFAULT_CUTOUT_ANALYSIS_MODEL = "gpt-5.5";
 const DEFAULT_SEMANTIC_EDIT_MODEL = "gpt-5.5";
+const DEFAULT_GPT_IMAGE2_ALPHA_PROMPT = "图一是我的特效贴图，帮我把图二的风格元素转移到图一的特效贴图上面，保持图一的剪影、造型和数量，必须还是图一的样式输出，我要拿去做特效用。";
+const GPT_IMAGE2_ALPHA_FIXED_BACKGROUND_PROMPT = "输出背景是50%灰，色号是#808080，不要阴影脏边，不要发光污染，不要模糊，不要改变数量，不要重新排版，不要生成新图标。";
 const RESPONSES_MAIN_MODEL_FALLBACKS = ["gpt-5.5", "gpt-5", "gpt-4.1", "gpt-4o"];
 const COMFY_INPAINT_MAX_PIXELS = 1600 * 1600;
 const COMFY_INPAINT_MAX_EDGE = 1600;
@@ -75,6 +77,11 @@ const COMFY_WORKFLOWS = {
     file: "codex_flux_fill_inpaint_masklock_api.json",
     prefix: "codex_ps_flux_fill_masklock",
   },
+};
+const GPT_IMAGE2_ALPHA_WORKFLOW = {
+  label: "External ComfyUI GPT Image2 Alpha",
+  file: "codex_gpt_image2_alpha_api.json",
+  prefix: "codex_ps_gpt_image2_alpha",
 };
 const PROMPT_PRESETS = [
   {
@@ -126,6 +133,7 @@ const state = {
   activeRequestController: null,
   activeXhrs: new Set(),
   cancelRequested: false,
+  styleReference: null,
   promptDrafts: {},
   promptDraftSaveSuspended: false,
   promptDraftAutosaveTimer: null,
@@ -287,6 +295,8 @@ function bindEvents() {
   $("testKoukoutuBtn").addEventListener("click", testKoukoutuConnection);
   $("apiKeyVisibilityBtn").addEventListener("click", toggleApiKeyVisibility);
   $("applyAuthJsonBtn").addEventListener("click", applyAuthJson);
+  $("chooseStyleReferenceBtn").addEventListener("click", chooseStyleReference);
+  $("clearStyleReferenceBtn").addEventListener("click", clearStyleReference);
 
   $("generateBtn").addEventListener("click", runGeneration);
   $("cancelRequestBtn").addEventListener("click", cancelCurrentGeneration);
@@ -369,9 +379,10 @@ function loadSettings() {
   $("koukoutuFormatInput").value = settings.koukoutuFormat || "png";
   $("koukoutuBorderInput").value = String(clampInteger(settings.koukoutuBorder, 0, 2, 0));
   $("sizeInput").value = settings.size;
-  $("qualityInput").value = "auto";
+  $("qualityInput").value = normalizeResponsesImageQuality(settings.quality);
   $("countInput").value = clampInteger(settings.count, 1, MAX_BATCH_COUNT, 1);
   $("formatInput").value = "png";
+  renderStyleReference();
 }
 
 function saveSettings() {
@@ -415,6 +426,69 @@ function applyAuthJson() {
   saveSettings();
   updateKeyBadge();
   setStatus("已切换为官方 OpenAI API 直连");
+}
+
+async function chooseStyleReference() {
+  try {
+    const picked = await fs.getFileForOpening({
+      types: ["png", "jpg", "jpeg", "webp"],
+      allowMultiple: false,
+    });
+    const file = Array.isArray(picked) ? picked[0] : picked;
+    if (!file) return;
+
+    const buffer = await file.read({ format: storage.formats.binary });
+    const bytes = new Uint8Array(buffer);
+    const format = inferImageFormatFromBytes(bytes) || inferImageFormatFromValue(file.name) || "png";
+    if (!["png", "jpeg", "jpg", "webp"].includes(format)) {
+      throw new Error("图二只支持 PNG / JPG / WebP");
+    }
+
+    state.styleReference = {
+      name: file.name || "style-reference",
+      b64: arrayBufferToBase64(buffer),
+      format: format === "jpg" ? "jpeg" : format,
+      bytes: buffer.byteLength || bytes.length,
+    };
+    renderStyleReference();
+    setStatus(`已选择图二：${state.styleReference.name}，参考图模式将调用外部 ComfyUI Alpha workflow`);
+  } catch (error) {
+    console.error("[style-reference] choose failed", error);
+    setStatus(`选择图二失败：${error.message || error}`);
+  }
+}
+
+function clearStyleReference() {
+  state.styleReference = null;
+  renderStyleReference();
+  setStatus("已清除图二：参考图模式恢复原来的普通图生图");
+}
+
+function renderStyleReference() {
+  const summary = $("styleReferenceSummary");
+  const preview = $("styleReferencePreview");
+  if (!summary || !preview) return;
+
+  preview.innerHTML = "";
+  const ref = state.styleReference;
+  preview.classList.toggle("has-items", Boolean(ref?.b64));
+  if (!ref?.b64) {
+    summary.textContent = "未选择图二：参考图模式使用原来的普通图生图。选择图二后，会走外部 ComfyUI GPT Image2 Alpha 工作流。";
+    return;
+  }
+
+  summary.textContent = `已选择图二：${ref.name || "style-reference"}（${formatBytes(ref.bytes || estimateBase64Bytes(ref.b64))}）。生成时会把当前 Photoshop 画布/选区作为图一，图二作为风格参考。`;
+  const item = document.createElement("div");
+  item.className = "manual-reference-item";
+  const image = document.createElement("img");
+  image.src = toDataUrl(ref.b64, ref.format || inferImageFormatFromValue(ref.b64) || "png");
+  image.alt = "图二风格参考";
+  const index = document.createElement("span");
+  index.className = "manual-reference-index";
+  index.textContent = "图二";
+  item.appendChild(image);
+  item.appendChild(index);
+  preview.appendChild(item);
 }
 
 function extractOpenAIApiKey(raw) {
@@ -470,7 +544,7 @@ function getSettings() {
     generationPath: normalizePath($("generationPathInput").value.trim() || "/images/generations"),
     editPath: normalizePath($("editPathInput").value.trim() || "/images/edits"),
     size: $("sizeInput").value,
-    quality: "auto",
+    quality: normalizeResponsesImageQuality($("qualityInput").value),
     count: clampInteger($("countInput").value, 1, MAX_BATCH_COUNT, 1),
     format: "png",
     koukoutuApiKey: $("koukoutuApiKeyInput").value.trim(),
@@ -574,9 +648,12 @@ function updateModeUI() {
   });
 
   $("outpaintControls").classList.toggle("hidden", state.mode !== "outpaint");
+  $("promptSection").classList.toggle("hidden", state.mode === "cutout");
   $("sizeField").classList.toggle("hidden", state.mode === "inpaint" || state.mode === "cutout" || state.mode === "split");
+  $("qualityField").classList.toggle("hidden", state.mode === "cutout");
   $("modeContextPanel").classList.add("hidden");
   $("referenceContext").classList.toggle("hidden", state.mode !== "reference");
+  $("styleReferenceSection").classList.toggle("hidden", state.mode !== "reference");
   $("selectionContext").classList.toggle(
     "hidden",
     state.mode !== "inpaint" && state.mode !== "outpaint" && state.mode !== "cutout" && state.mode !== "split"
@@ -651,8 +728,11 @@ function updateModeUI() {
 
   const hint = $("modeHint");
   if (hint) {
-    hint.textContent = MODE_META[state.mode]?.hint || "直接生成新图";
+    hint.textContent = state.mode === "reference" && state.styleReference?.b64
+      ? "使用当前画布作为图一，并用图二风格参考调用外部 ComfyUI Alpha workflow"
+      : MODE_META[state.mode]?.hint || "直接生成新图";
   }
+  renderStyleReference();
 }
 
 function applyDocumentPaddingPreset() {
@@ -845,13 +925,14 @@ async function runGeneration() {
   }
 
   const rawPrompt = $("promptInput").value.trim();
-  if (!rawPrompt && state.mode !== "cutout" && state.mode !== "split") {
+  const useStyleReferenceWorkflow = state.mode === "reference" && Boolean(state.styleReference?.b64);
+  if (!rawPrompt && state.mode !== "cutout" && state.mode !== "split" && !useStyleReferenceWorkflow) {
     setStatus("请先输入提示词");
     return;
   }
 
   savePromptDraftForMode();
-  const prompt = buildPrompt(rawPrompt || "auto", $("negativePromptInput").value.trim());
+  const prompt = buildPrompt(rawPrompt || (useStyleReferenceWorkflow ? DEFAULT_GPT_IMAGE2_ALPHA_PROMPT : "auto"), $("negativePromptInput").value.trim());
   saveSettings();
   const runController = createAbortController();
   state.activeRequestController = runController;
@@ -878,7 +959,27 @@ async function runGeneration() {
     } else if (state.mode === "reference") {
       setProgress(18, true);
       const selection = await getSelectionInfo();
-      if (isSelectionValid(selection)) {
+      if (state.styleReference?.b64) {
+        const docSize = getDocumentSize();
+        setStatus("正在导出当前 Photoshop 图一，准备外部 ComfyUI Alpha 图生图...");
+        const alphaInput = await createGptImage2AlphaInputs(selection, docSize);
+        outputSize = alphaInput.displaySize;
+        targetRect = alphaInput.targetRect;
+        placementRect = alphaInput.placementRect;
+        setProgress(40, true);
+        items = await requestGptImage2AlphaComfy(settings, prompt, alphaInput.image, state.styleReference.b64, {
+          styleReferenceName: state.styleReference.name,
+          sourceSize: alphaInput.displaySize,
+        });
+        items = (items || []).map((item) => ({
+          ...item,
+          placementMode: "alpha-style-patch",
+          targetRect: alphaInput.targetRect,
+          placementRect: alphaInput.placementRect,
+          cropRect: null,
+          skipPreviewCrop: true,
+        }));
+      } else if (isSelectionValid(selection)) {
         setStatus("正在导出选区上下文作为无 Mask 参考图...");
         const reference = await createReferenceRegionInputs(selection, getDocumentSize(), settings.model);
         outputSize = reference.displaySize;
@@ -3493,6 +3594,68 @@ async function requestSingleComfyEdit(settings, prompt, imageB64, maskB64, optio
   return [{ b64: outputB64, format: "png" }];
 }
 
+async function requestGptImage2AlphaComfy(settings, prompt, image1B64, image2B64, options = {}) {
+  if (!image1B64 || !image2B64) {
+    throw new Error("GPT Image2 Alpha 需要图一和图二：图一来自当前 Photoshop 画布/选区，图二请先点“选择图二”。");
+  }
+  if (!settings.apiKey) {
+    throw new Error("请先在设置里填写 OpenAI API Key；插件会把它传给外部 ComfyUI 的 GPT Image2 节点，不会写死到 workflow 文件里。");
+  }
+
+  const preset = GPT_IMAGE2_ALPHA_WORKFLOW;
+  const statsResponse = await sendRequest(buildComfyUrl(settings.comfyUrl, "/system_stats"), {
+    method: "GET",
+  }, "ComfyUI 状态检查");
+  if (!statsResponse.ok) {
+    throw new Error(`外部 ComfyUI 不可用：HTTP ${statsResponse.status}。插件不会内置 ComfyUI，请先打开你自己的 ComfyUI 服务。`);
+  }
+
+  const workflow = await loadComfyWorkflow(preset);
+  const runId = `${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+  setProgress(56, true);
+  setStatus("正在上传图一到外部 ComfyUI...");
+  const image1Name = await uploadComfyImage(settings, image1B64, `${preset.prefix}_${runId}_image1.png`);
+  setProgress(60, true);
+  setStatus("正在上传图二风格参考到外部 ComfyUI...");
+  const image2Name = await uploadComfyImage(settings, image2B64, `${preset.prefix}_${runId}_image2.png`);
+  const prefix = `${preset.prefix}_${runId}`;
+  const preparedWorkflow = prepareGptImage2AlphaWorkflow(workflow, {
+    image1Name,
+    image2Name,
+    prompt,
+    apiKey: settings.apiKey,
+    seed: createRandomSeed(),
+    prefix,
+  });
+
+  await saveDebugJsonFile("comfy-gpt-image2-alpha-request.json", {
+    pluginVersion: PLUGIN_VERSION,
+    route: "external-comfy-gpt-image2-alpha",
+    comfyUrl: sanitizeDebugEndpointUrl(settings.comfyUrl),
+    workflowFile: preset.file,
+    workflowLabel: preset.label,
+    image1Bytes: estimateBase64Bytes(image1B64),
+    image2Bytes: estimateBase64Bytes(image2B64),
+    sourceSize: options.sourceSize || null,
+    styleReferenceName: options.styleReferenceName || null,
+    promptLength: String(prompt || "").length,
+    apiKeyPresent: Boolean(settings.apiKey),
+    bundledComfyUI: false,
+  });
+
+  setProgress(64, true);
+  setStatus("正在提交外部 ComfyUI GPT Image2 Alpha workflow...");
+  const promptId = await queueComfyWorkflow(settings, preparedWorkflow);
+  setProgress(72, true);
+  setStatus("正在等待外部 ComfyUI 输出透明 PNG...");
+  const imageRef = await waitForComfyOutput(settings, promptId);
+  setProgress(84, true);
+  setStatus("正在下载外部 ComfyUI Alpha 输出图...");
+  const outputB64 = await downloadComfyImage(settings, imageRef);
+  await saveDebugBase64Image("comfy-gpt-image2-alpha-output.png", outputB64);
+  return [{ b64: outputB64, importB64: outputB64, format: "png" }];
+}
+
 async function requestComfyCutout(settings, prompt, imageB64) {
   const statsResponse = await sendRequest(buildComfyUrl(settings.comfyUrl, "/system_stats"), {
     method: "GET",
@@ -4104,6 +4267,43 @@ function prepareComfyWorkflow(workflow, { imageName, prompt, seed, prefix }) {
   return next;
 }
 
+function prepareGptImage2AlphaWorkflow(workflow, { image1Name, image2Name, prompt, apiKey, seed, prefix }) {
+  const next = JSON.parse(JSON.stringify(workflow));
+  setComfyNodeInput(next, "24", "image", image1Name);
+  setComfyNodeInput(next, "2", "image", image2Name);
+  setComfyNodeInput(next, "17", "text", String(prompt || DEFAULT_GPT_IMAGE2_ALPHA_PROMPT).trim() || DEFAULT_GPT_IMAGE2_ALPHA_PROMPT);
+  setComfyNodeInput(next, "16", "text", GPT_IMAGE2_ALPHA_FIXED_BACKGROUND_PROMPT);
+  setComfyNodeInput(next, "14", "apikey", apiKey);
+  setComfyNodeInput(next, "25", "model", "gpt-image-2");
+  setComfyNodeInput(next, "25", "size", "1024x1024（1K 1:1）");
+  setComfyNodeInput(next, "25", "response_format", "b64_json");
+  setComfyNodeInput(next, "25", "seed", seed);
+  setComfyNodeInput(next, "19", "upscale_method", "lanczos");
+  setComfyNodeInput(next, "19", "width", 0);
+  setComfyNodeInput(next, "19", "height", 3840);
+  setComfyNodeInput(next, "19", "crop", "disabled");
+  setComfyNodeInput(next, "23", "background_color", "128,128,128");
+  setComfyNodeInput(next, "23", "tolerance", 0.055);
+  setComfyNodeInput(next, "23", "softness", 0.08);
+  setComfyNodeInput(next, "23", "edge_contract_px", 1);
+  setComfyNodeInput(next, "23", "feather_radius", 1);
+  setComfyNodeInput(next, "23", "decontaminate_edge", true);
+  setComfyNodeInput(next, "23", "refine_scale", 2);
+  setComfyNodeInput(next, "23", "background_mode", "transparent");
+  setComfyNodeInput(next, "23", "background_preset", "gray");
+  setComfyNodeInput(next, "20", "filename_prefix", prefix);
+  return next;
+}
+
+function setComfyNodeInput(workflow, nodeId, inputName, value) {
+  const node = workflow?.[nodeId];
+  if (!node || typeof node !== "object") {
+    throw new Error(`workflow 缺少节点 ${nodeId}`);
+  }
+  node.inputs = node.inputs && typeof node.inputs === "object" ? node.inputs : {};
+  node.inputs[inputName] = value;
+}
+
 async function queueComfyWorkflow(settings, workflow) {
   const body = JSON.stringify({
     client_id: createComfyClientId(),
@@ -4233,6 +4433,27 @@ async function createCutoutInputs() {
     ? await exportDocumentRegionAsBase64(placementRect)
     : await exportActiveDocumentAsBase64();
   await saveDebugBase64Image("cutout-last-input.png", image);
+
+  return {
+    image,
+    placementRect,
+    targetRect: placementRect,
+    displaySize: `${placementRect.width}x${placementRect.height}`,
+  };
+}
+
+async function createGptImage2AlphaInputs(selection, docSize) {
+  if (!app.activeDocument) {
+    throw new Error("当前没有打开的 Photoshop 文档");
+  }
+
+  const placementRect = isSelectionValid(selection)
+    ? roundRectToPixels(clampRectToDocument(cloneRect(selection), docSize))
+    : { left: 0, top: 0, right: docSize.width, bottom: docSize.height, width: docSize.width, height: docSize.height };
+  const image = isSelectionValid(selection)
+    ? await exportDocumentRegionAsBase64(placementRect)
+    : await exportActiveDocumentAsBase64();
+  await saveDebugBase64Image("comfy-gpt-image2-alpha-image1.png", image);
 
   return {
     image,
@@ -5853,8 +6074,9 @@ async function importSelected() {
       await expandCanvasForOutpaint(item.outpaintPadding, item.targetRect || item.placementRect, item.outpaintBaseSize);
     }
     const directSelectionPatch = isDirectSelectionPatchResult(itemToPlace);
+    const alphaStylePatch = itemToPlace?.placementMode === "alpha-style-patch";
     await placeResultAsLayer(itemToPlace, placementRect, layerName, needsPostImportMask ? cropRectToPlace : null, {
-      fitByImageSize: isMaskedInpaintLayerResult(itemToPlace) || directSelectionPatch || isSplitElement,
+      fitByImageSize: isMaskedInpaintLayerResult(itemToPlace) || directSelectionPatch || isSplitElement || alphaStylePatch,
       alignVisibleRect: isMaskedInpaintLayerResult(itemToPlace) || isSplitElement,
       preserveImageAspect: item.mode === "cutout" || item.mode === "outpaint" || item.placementMode === "full-region-patch",
       rasterizeBeforeMask: needsPostImportMask,

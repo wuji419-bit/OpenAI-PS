@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenAI 图片</title>
-    <link rel="stylesheet" href="./src/styles.css?v=0.1.293" />
-    <script src="./src/app.js?v=0.1.293" defer></script>
+    <link rel="stylesheet" href="./src/styles.css?v=0.1.297" />
+    <script src="./src/app.js?v=0.1.297" defer></script>
   </head>
   <body>
     <main class="app-shell">
@@ -15,7 +15,7 @@
             <div class="title-inline">
               <span id="connectionBadge" class="connection-dot" aria-hidden="true" title="未配置 API Key"></span>
               <h1>OpenAI 图片</h1>
-              <span id="versionText" class="version-inline">v0.1.293</span>
+              <span id="versionText" class="version-inline">v0.1.297</span>
             </div>
             <button id="settingsToggleBtn" class="icon-button settings-entry-button" type="button" title="打开 API 设置" aria-label="打开 API 设置">
               设置
@@ -74,7 +74,7 @@
             </div>
           </section>
 
-          <section class="section-block prompt-section">
+          <section id="promptSection" class="section-block prompt-section">
             <div class="section-header">
               <label id="promptLabel" for="promptInput" class="section-label">提示词 (Prompt)</label>
               <div class="tool-strip prompt-actions">
@@ -87,6 +87,18 @@
             <textarea id="promptInput" class="prompt-input" placeholder="描述您想要生成的画面..."></textarea>
             <label id="negativePromptLabel" for="negativePromptInput" class="section-label secondary-label">反向提示词 (Negative Prompt)</label>
             <input id="negativePromptInput" class="field-input" type="text" placeholder="不希望出现的内容..." />
+          </section>
+
+          <section id="styleReferenceSection" class="section-block manual-reference-row hidden">
+            <div class="section-header">
+              <div class="minor-title">风格参考图（图二，可选）</div>
+            </div>
+            <div class="manual-reference-actions">
+              <button id="chooseStyleReferenceBtn" class="mini-button reference-action-button" type="button">选择图二</button>
+              <button id="clearStyleReferenceBtn" class="mini-button reference-action-button" type="button">清除图二</button>
+            </div>
+            <div id="styleReferenceSummary" class="manual-reference-summary">未选择图二：参考图模式使用原来的普通图生图。选择图二后，会走 ComfyUI GPT Image2 Alpha 工作流。</div>
+            <div id="styleReferencePreview" class="manual-reference-preview"></div>
           </section>
 
           <section class="section-block parameter-section">
@@ -105,9 +117,17 @@
                   </select>
                 </div>
               </label>
-              <select id="qualityInput" class="hidden" aria-hidden="true">
-                <option value="auto">自动</option>
-              </select>
+              <label id="qualityField" class="form-field">
+                <span class="form-label">质量</span>
+                <div class="select-wrap">
+                  <select id="qualityInput">
+                    <option value="auto">自动</option>
+                    <option value="low">低</option>
+                    <option value="medium">中</option>
+                    <option value="high">高</option>
+                  </select>
+                </div>
+              </label>
               <label class="form-field quantity-field">
                 <span class="form-label">数量: <strong id="countValue">1</strong></span>
                 <input id="countInput" type="number" min="1" max="10" step="1" value="1" />
@@ -184,7 +204,7 @@
       <section id="settingsView" class="settings-view hidden">
         <header class="settings-header">
           <button id="settingsBackBtn" class="icon-button back-button" type="button" title="返回" aria-label="返回"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5" /></svg></button>
-          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.293</span></div>
+          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.297</span></div>
         </header>
         <div class="settings-scroll">
           <section class="settings-group">

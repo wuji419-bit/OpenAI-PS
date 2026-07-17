@@ -2677,7 +2677,6 @@ button:disabled {
 }
 
 .parameter-section .parameter-grid > .hidden,
-.parameter-section #qualityInput,
 .parameter-section #formatInput {
   display: none !important;
   width: 0 !important;
@@ -2711,6 +2710,7 @@ button:disabled {
 
 .parameter-section .select-wrap,
 .parameter-section #sizeInput,
+.parameter-section #qualityInput,
 .parameter-section #countInput {
   display: block !important;
   width: 168px !important;
@@ -2719,6 +2719,7 @@ button:disabled {
 }
 
 .parameter-section #sizeInput,
+.parameter-section #qualityInput,
 .parameter-section #countInput {
   height: 27px !important;
   min-height: 27px !important;
