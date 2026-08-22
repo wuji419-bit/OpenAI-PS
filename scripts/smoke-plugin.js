@@ -8,6 +8,7 @@ const vm = require("vm");
 const root = `${__dirname}/..`;
 const html = fs.readFileSync(`${root}/index.html`, "utf8");
 const appJs = fs.readFileSync(`${root}/src/app.js`, "utf8");
+const css = fs.readFileSync(`${root}/src/styles.css`, "utf8");
 
 function assert(condition, message) {
   if (!condition) {
@@ -145,6 +146,22 @@ function checkUiBindings() {
   const refs = [...appJs.matchAll(/\$\("([^"]+)"\)/g)].map((match) => match[1]);
   const missing = [...new Set(refs.filter((id) => !ids.includes(id)))];
   assert(!missing.length, `Missing HTML elements referenced by app.js: ${missing.join(", ")}`);
+  for (const id of ["chooseReferenceImageBtn", "manualReferencePreview", "manualReferenceImage", "manualReferenceSummary", "clearReferenceImageBtn", "replaceReferenceImageBtn"]) {
+    assert(ids.includes(id), `Reference mode must expose manual reference image control: ${id}`);
+  }
+  assert(html.indexOf('id="referenceContext"') > html.indexOf('class="section-block prompt-section"'), "Reference picker should live inside the main prompt section, not the unstable mode context panel");
+  assert(ids.includes("fitSelectionRow"), "Fit-selection row needs an id so reference mode can hide it");
+  assert(!appJs.includes('$("modeContextPanel").classList.add("hidden");'), "Mode context panel must not be unconditionally hidden");
+  assert(appJs.includes("showReferenceContext") && appJs.includes("showSelectionContext"), "Reference and selection contexts should drive the mode context panel visibility");
+  assert(appJs.includes("isNegativePromptEnabledForMode"), "Mode UI should be able to hide negative prompt where it is not useful");
+  assert(appJs.includes("isPromptPresetEnabledForMode"), "Mode UI should be able to hide prompt presets where they are not useful");
+  assert(appJs.includes("function setElementHidden"), "Mode UI should use a UXP-safe hidden helper for critical controls");
+  assert(appJs.includes('setProperty("display", "none", "important")'), "Hidden helper should beat later UXP display overrides");
+  assert(appJs.includes('setElementHidden("promptPresetBtn", !showPromptPresets);'), "Reference mode should hide the prompt template button");
+  assert(appJs.includes('if (!showPromptPresets) setElementHidden("promptPresetMenu", true);'), "Reference mode should close any open prompt template menu");
+  assert(!css.includes("#referenceContext,\n#selectionContext"), "Reference context must not be included in the old always-hidden helper-card CSS selector");
+  assert(css.includes("#referenceContext.reference-inline-panel") && css.includes("#referenceContext.reference-inline-panel.hidden"), "Reference picker should have explicit visible and hidden CSS states");
+  assert(css.includes(".parameter-section #fitSelectionRow.hidden"), "Fit-selection row needs a late CSS override to beat parameter-section display rules");
 }
 
 function checkSmokeCommandCompatibility() {
@@ -221,6 +238,18 @@ function checkRuntimeReloadScript() {
   assert(appJs.includes("outpaintCanvasExpand="), "Runtime offline diagnostics should log outpaint canvas expansion coverage");
   assert(appJs.includes("cutoutOriginalSize="), "Runtime offline diagnostics should log cutout original-size preservation coverage");
   assert(appJs.includes("splitFullCanvas="), "Runtime offline diagnostics should log semantic split full-canvas coverage");
+  assert(!appJs.includes("拆图现在会用抠抠图做透明抠像"), "Split mode should not require a Koukoutu key");
+  assert(appJs.includes("whiteMatteLayer: true"), "Split mode should retain the opaque white fallback marker");
+  assert(appJs.includes("transparentLayer: transparentOutput"), "Split mode should mark native transparent PNG layers");
+  assert(appJs.includes('background: "transparent"'), "Split mode should request transparent output from GPT Image 2");
+  assert(appJs.includes("normalizeImageBackground"), "Image requests should normalize transparent background options");
+  assert(appJs.includes("flattenRgbaOnWhite"), "Split mode should retain white-matte fallback normalization");
+  assert(appJs.includes("requestSemanticSplitTargetRegions"), "Split mode should locate every requested target on the original canvas before redraw");
+  assert(appJs.includes("requestSemanticSplitRedrawRegions"), "Split mode should match actual redraw contents back to the source before coordinate locking");
+  assert(appJs.includes("refineSemanticSplitTargetsWithPhotoshop"), "Split mode should tighten candidate matches with Photoshop Select Subject before placement");
+  assert(appJs.includes('_obj: "autoCutout"'), "Photoshop semantic split refinement should invoke the host Select Subject command");
+  assert(appJs.includes("lockWhiteRedrawToSemanticRegion"), "Split mode should hard-lock redraw pixels back into the detected original region");
+  assert(appJs.includes("for (const item of stamped)"), "Result history should save sibling split layers sequentially");
   assert(appJs.includes("loadImage(toDataUrl(generatedB64"), "Inpaint composite should load model output with inferred image format");
   assert(!appJs.includes("loadImage(`data:image/png;base64,${stripDataUrl(generatedB64)}`)"), "Inpaint composite must not force model output through PNG data URLs");
   assert(appJs.includes("loadImage(toDataUrl(imageB64, inferImageFormatFromValue(imageB64)"), "Inpaint clip fallback should load model output with inferred image format");
@@ -253,13 +282,29 @@ function checkSelectionRepaintCopy() {
   assert(appJs.includes("openai-last-images-edit-request.json"), "/images/edits compatibility route should save a sanitized request debug record for route verification");
   assert(appJs.includes("openai-last-inpaint-input.json"), "Screenshot repaint should save sanitized input metadata proving no-mask normal-image upload");
   assert(appJs.includes("sanitizeDebugEndpointUrl"), "Debug request records should sanitize endpoint URLs before writing them to disk");
-  assert(appJs.includes("选区截图重绘请求意外包含 API Mask"), "Screenshot repaint should stop if a future regression tries to attach an API mask");
+  assert(appJs.includes("普通上传参考图请求意外包含 API Mask"), "Normal-upload reference and screenshot repaint should stop if a future regression tries to attach an API mask");
   assert(appJs.includes("getImageEditInputFidelity(settings.model, true)"), "Image edit requests should enable high input fidelity for GPT Image reference preservation");
   assert(!appJs.includes("重绘还需要服务支持 /images/edits"), "Connection status must not say selection repaint depends on /images/edits");
   assert(appJs.includes("选区重绘需要 /responses 图像工具"), "Connection status should name the Responses image tool for selection repaint");
 }
 
 function makeElement(id = "") {
+  const classNames = new Set();
+  const style = {
+    setProperty(name, value, priority = "") {
+      this[name] = value;
+      this[`${name}Priority`] = priority;
+    },
+    removeProperty(name) {
+      const value = this[name] || "";
+      delete this[name];
+      delete this[`${name}Priority`];
+      return value;
+    },
+    getPropertyValue(name) {
+      return this[name] || "";
+    },
+  };
   return {
     id,
     value: "",
@@ -270,18 +315,34 @@ function makeElement(id = "") {
     hidden: false,
     className: "",
     dataset: {},
-    style: {},
+    style,
     children: [],
     type: "password",
     title: "",
     classList: {
-      add() {},
-      remove() {},
-      toggle() {},
-      contains() { return false; },
+      add(...names) { names.forEach((name) => classNames.add(name)); },
+      remove(...names) { names.forEach((name) => classNames.delete(name)); },
+      toggle(name, force) {
+        if (force === true) {
+          classNames.add(name);
+          return true;
+        }
+        if (force === false) {
+          classNames.delete(name);
+          return false;
+        }
+        if (classNames.has(name)) {
+          classNames.delete(name);
+          return false;
+        }
+        classNames.add(name);
+        return true;
+      },
+      contains(name) { return classNames.has(name); },
     },
     addEventListener() {},
     setAttribute() {},
+    removeAttribute() {},
     append(...nodes) { this.children.push(...nodes); },
     appendChild(node) { this.children.push(node); return node; },
     contains() { return false; },
@@ -464,6 +525,23 @@ async function runVmSmoke() {
       $("koukoutuFormatInput").value = "png";
       $("koukoutuBorderInput").value = "0";
 
+      state.mode = "reference";
+      updateModeUI();
+      assert($("modeContextPanel").hidden === true, "Reference mode should not depend on the mode context panel");
+      assert($("referenceContext").hidden === false, "Reference mode should show the manual reference image picker context");
+      assert($("selectionContext").hidden === true, "Reference mode should hide selection-only context");
+      assert($("negativePromptInput").hidden === true, "Reference mode should hide the negative prompt input");
+      assert($("useSelectionSizeBtn").hidden === true, "Reference mode should hide selection-size shortcut");
+      assert($("promptPresetBtn").hidden === true, "Reference mode should hide prompt templates");
+      assert($("fitSelectionRow").hidden === true && $("fitSelectionRow").style.display === "none", "Reference mode should force-hide the fit-selection row even under UXP display overrides");
+      setElementHidden("promptPresetMenu", false);
+      togglePresetMenu();
+      assert($("promptPresetMenu").hidden === true, "Reference mode should not open the prompt template menu");
+      state.mode = "generate";
+      updateModeUI();
+      assert($("modeContextPanel").hidden === true, "Generate mode should hide the mode context panel");
+      assert($("promptPresetBtn").hidden === false, "Generate mode should keep prompt templates available");
+
       renderResults = () => {};
       renderHistory = () => {};
       renderOutputView = () => {};
@@ -499,10 +577,12 @@ async function runVmSmoke() {
       };
       expandCanvasForOutpaint = async (padding, rect) => calls.push(["expand", padding && padding.left, rect && rect.width]);
       let currentSelection = { left: 10, top: 12, right: 50, bottom: 42, width: 40, height: 30 };
+      let referenceRegionInputCalls = 0;
       getSelectionInfo = async () => currentSelection;
       getDocumentSize = () => ({ width: 100, height: 80 });
       exportActiveDocumentAsBase64 = async () => b64;
       createReferenceRegionInputs = async () => ({
+        ...(referenceRegionInputCalls += 1, {}),
         image: b64,
         apiSize: "auto",
         displaySize: "40x30",
@@ -549,7 +629,7 @@ async function runVmSmoke() {
       compositeItemsWithOriginalMask = async (items) => items;
       requestGenerations = async () => { calls.push(["generate"]); return [{ b64, format: "png" }]; };
       requestEdits = async (settings, prompt, image, mask, options = {}) => {
-        calls.push(["edit", state.mode, Boolean(mask), Boolean(options.screenshotReferenceEdit), prompt]);
+        calls.push(["edit", state.mode, Boolean(mask), Boolean(options.screenshotReferenceEdit), prompt, Boolean(options.manualReferenceEdit), options.referenceSize || null]);
         if (state.mode === "outpaint") {
           return [{ b64: createOfflineDiagnosticPngBase64(12, 10, "outpaint-smoke"), format: "png" }];
         }
@@ -662,6 +742,14 @@ async function runVmSmoke() {
       assert(genericObjectResponsesPrompt.includes("完整可见形状") && genericObjectResponsesPrompt.includes("complete visible shape"), "Generic screenshot edit prompt should use the same complete-target rules for arbitrary objects");
       assert(genericObjectResponsesPrompt.includes("受保护参考") && genericObjectResponsesPrompt.includes("protected reference content"), "Generic screenshot edit prompt should protect arbitrary objects the user says stay unchanged");
       assert(!genericObjectResponsesPrompt.includes("把中间的手去掉") && !genericObjectResponsesPrompt.includes("弓不要变"), "Generic screenshot edit prompt must not reuse the bow/hand test instruction");
+      const manualReferenceResponsesPrompt = buildResponsesImageEditPrompt("参考这张图重新画一个金色按钮", false, {
+        size: "auto",
+        manualReferenceEdit: true,
+        referenceSize: "640x360",
+      });
+      assert(manualReferenceResponsesPrompt.includes("手动选择的参考图") && manualReferenceResponsesPrompt.includes("user-selected source/reference image"), "Manual reference edit prompt should describe a normal uploaded reference image");
+      assert(manualReferenceResponsesPrompt.includes("不要把参考图当成 Photoshop 选区补丁"), "Manual reference edit prompt must not use selection patch semantics");
+      assert(!manualReferenceResponsesPrompt.includes("Selected Photoshop crop size"), "Manual reference prompt should not describe the image as a Photoshop selected crop");
       const shiftedCanvasPixels = new Uint8Array(1200 * 500 * 4).fill(255);
       for (let y = 60; y < 190; y += 1) {
         for (let x = 100; x < 1100; x += 1) {
@@ -817,6 +905,35 @@ async function runVmSmoke() {
       assert(capturedSelectedReferencePayload?.tools?.[0]?.input_fidelity === undefined, "Selected no-mask reference edits with GPT Image 2 should omit explicit input_fidelity");
       assert(capturedSelectedReferencePayload?.input?.[0]?.content?.[0]?.type === "input_image", "Selected no-mask reference edits should also send the uploaded image before the instruction text");
       assert(JSON.stringify(capturedSelectedReferencePayload).includes("按普通上传图片编辑"), "Selected reference edit prompt should use normal uploaded-image semantics");
+      let capturedManualReferencePayload = null;
+      let capturedManualReferenceDebug = null;
+      saveDebugJsonFile = async (name, data) => {
+        if (name === "openai-last-responses-edit-request.json") capturedManualReferenceDebug = data;
+      };
+      sendRequest = async (url, requestOptions) => {
+        assert(String(url).endsWith("/responses"), "Manual reference edit should call /responses directly");
+        capturedManualReferencePayload = JSON.parse(String(requestOptions.body || "{}"));
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          text: async () => JSON.stringify({
+            output: [{ type: "image_generation_call", result: b64, output_format: "png" }],
+          }),
+        };
+      };
+      const manualReferenceItems = await requestSingleEdit(getSettings(), buildImageEditPrompt("参考这张图生成一个变体", "reference"), b64, null, {
+        size: "auto",
+        manualReferenceEdit: true,
+        referenceSize: "2x2",
+      });
+      sendRequest = savedSendRequest;
+      saveDebugJsonFile = savedDebugJsonFileForResponses;
+      assert(manualReferenceItems.length === 1 && manualReferenceItems[0].b64 === b64, "Manual reference edit should parse direct Responses image results");
+      assert(capturedManualReferencePayload?.input?.[0]?.content?.[0]?.type === "input_image", "Manual reference edits should send the uploaded reference image before instruction text");
+      assert(!JSON.stringify(capturedManualReferencePayload).includes("input_image_mask"), "Manual reference edit must not send input_image_mask");
+      assert(capturedManualReferenceDebug?.route === "manual-reference-edit" && capturedManualReferenceDebug?.manualReferenceEdit === true, "Manual reference debug record should identify the manual reference route");
+      assert(capturedManualReferenceDebug?.inputContentOrder === "image-first", "Manual reference debug record should expose image-first uploaded-reference content order");
       let capturedGenerationPayload = null;
       sendRequest = async (url, requestOptions) => {
         assert(String(url).endsWith("/responses"), "Responses text generation fallback should call /responses");
@@ -1612,7 +1729,7 @@ async function runVmSmoke() {
       try {
         await normalizeSemanticSplitLayerItem({ b64, format: "png" }, { width: 20, height: 20 }, "坏拆图层", 1);
       } catch (error) {
-        rejectedSplitDecodeFailure = /未透明化的整张结果/.test(String(error?.message || error));
+        rejectedSplitDecodeFailure = /拆图结果/.test(String(error?.message || error));
       }
       let rejectedFallbackSplitDecodeFailure = false;
       try {
@@ -1621,7 +1738,7 @@ async function runVmSmoke() {
         rejectedFallbackSplitDecodeFailure = /未透明化的整张结果/.test(String(error?.message || error));
       }
       imageItemToCanvasRgba = realImageItemToCanvasRgba;
-      assert(rejectedSplitDecodeFailure, "Semantic split layer decode failures should fail safely instead of creating a full-canvas white-matte fallback");
+      assert(rejectedSplitDecodeFailure, "Semantic split layer decode failures should fail safely instead of importing invalid white redraw bytes");
       assert(rejectedFallbackSplitDecodeFailure, "Fallback split decode failures should fail safely instead of creating a full-canvas white-matte fallback");
       const splitPixels = new Uint8Array(20 * 20 * 4);
       for (let i = 0; i < splitPixels.length; i += 4) {
@@ -1647,8 +1764,38 @@ async function runVmSmoke() {
       assert(splitLayer.splitBounds.left === 5 && splitLayer.splitBounds.top === 4 && splitLayer.splitBounds.width === 11 && splitLayer.splitBounds.height === 10, "Semantic split should detect the visible element bounds without moving the layer");
       const splitLayerDecoded = await decodePngRgbaBase64(splitLayer.b64);
       assert(splitLayerDecoded.width === 20 && splitLayerDecoded.height === 20, "Semantic split output should remain full-canvas, not cropped to the element bounds");
-      assert(splitLayerDecoded.rgba[3] === 0, "Semantic split white matte should become transparent before Photoshop placement");
+      assert(splitLayerDecoded.rgba[0] === 255 && splitLayerDecoded.rgba[1] === 255 && splitLayerDecoded.rgba[2] === 255 && splitLayerDecoded.rgba[3] === 255, "Semantic split background should remain opaque pure white for manual Photoshop cutout");
       assert(splitLayerDecoded.rgba[((4 * 20 + 5) * 4) + 3] === 255, "Semantic split target pixels should remain opaque");
+      const transparentSplitPixels = new Uint8Array(20 * 20 * 4);
+      for (let y = 4; y < 14; y += 1) {
+        for (let x = 5; x < 16; x += 1) {
+          const offset = (y * 20 + x) * 4;
+          transparentSplitPixels[offset] = 120;
+          transparentSplitPixels[offset + 1] = 70;
+          transparentSplitPixels[offset + 2] = 24;
+          transparentSplitPixels[offset + 3] = 255;
+        }
+      }
+      const transparentSplitLayer = await normalizeSemanticSplitLayerItem({
+        b64: bytesToBase64(encodePngRgba(20, 20, transparentSplitPixels)),
+        format: "png",
+      }, { width: 20, height: 20 }, "透明弓身", 6, { model: "gpt-image-2", format: "png" });
+      const transparentSplitDecoded = await decodePngRgbaBase64(transparentSplitLayer.b64);
+      assert(transparentSplitLayer.transparentLayer && !transparentSplitLayer.whiteMatteLayer, "Transparent GPT Image 2 split results should remain transparent layers");
+      assert(transparentSplitDecoded.rgba[3] === 0, "Transparent split output should keep alpha zero outside the element");
+      assert(transparentSplitDecoded.rgba[((4 * 20 + 5) * 4) + 3] === 255, "Transparent split target pixels should keep their alpha");
+      const lockedSplitLayer = await normalizeSemanticSplitLayerItem({
+        b64: bytesToBase64(encodePngRgba(20, 20, splitPixels)),
+        format: "png",
+      }, { width: 20, height: 20 }, "原位弓身", 2, null, {
+        region: { left: 2, top: 1, right: 10, bottom: 8 },
+      });
+      const lockedSplitDecoded = await decodePngRgbaBase64(lockedSplitLayer.b64);
+      assert(lockedSplitLayer.coordinateLocked, "Semantic split should mark redraw layers whose pixels were locked to source coordinates");
+      assert(lockedSplitLayer.splitBounds.left === 2 && lockedSplitLayer.splitBounds.top === 1 && lockedSplitLayer.splitBounds.width === 8 && lockedSplitLayer.splitBounds.height === 7, "Semantic split should replace model-drifted bounds with the original target region");
+      assert(lockedSplitDecoded.rgba[0] === 255 && lockedSplitDecoded.rgba[1] === 255 && lockedSplitDecoded.rgba[2] === 255 && lockedSplitDecoded.rgba[3] === 255, "Coordinate locking should keep the rest of the full canvas opaque white");
+      const lockedTargetOffset = (1 * 20 + 2) * 4;
+      assert(lockedSplitDecoded.rgba[lockedTargetOffset] === 120 && lockedSplitDecoded.rgba[lockedTargetOffset + 1] === 70, "Coordinate locking should move the isolated redraw into the detected original bbox");
       const savedKoukoutuForSplit = requestKoukoutuCutout;
       let splitKoukoutuCalled = 0;
       requestKoukoutuCutout = async (settings, imageB64) => {
@@ -1669,8 +1816,8 @@ async function runVmSmoke() {
         format: "png",
       }, { width: 20, height: 20 }, "抠抠图弓身", 5, { koukoutuApiKey: "test-key", koukoutuFormat: "png" });
       requestKoukoutuCutout = savedKoukoutuForSplit;
-      assert(splitKoukoutuCalled === 1 && koukoutuSplitLayer.koukoutuMatte, "Semantic split should use Koukoutu for white-matte transparency when configured");
-      assert(koukoutuSplitLayer.importVisibleRect.left === 5 && koukoutuSplitLayer.importVisibleRect.top === 4, "Koukoutu split layers should preserve visible bounds for original-position import");
+      assert(splitKoukoutuCalled === 0 && koukoutuSplitLayer.whiteMatteLayer && !koukoutuSplitLayer.koukoutuMatte, "Semantic split should keep an opaque white redraw and never call Koukoutu even when its key is configured");
+      assert(koukoutuSplitLayer.importVisibleRect.left === 5 && koukoutuSplitLayer.importVisibleRect.top === 4, "White redraw split layers should preserve detected bounds for original-position metadata");
       const savedSplitUrlSendRequest = sendRequest;
       sendRequest = async () => ({
         ok: true,
@@ -1682,7 +1829,7 @@ async function runVmSmoke() {
       }, { width: 20, height: 20 }, "URL 弓身", 2);
       sendRequest = savedSplitUrlSendRequest;
       const splitUrlLayerDecoded = await decodePngRgbaBase64(splitUrlLayer.b64);
-      assert(splitUrlLayerDecoded.rgba[3] === 0 && splitUrlLayerDecoded.rgba[((4 * 20 + 5) * 4) + 3] === 255, "Semantic split URL image results should be downloaded and white-matte processed before placement");
+      assert(splitUrlLayerDecoded.rgba[0] === 255 && splitUrlLayerDecoded.rgba[3] === 255 && splitUrlLayerDecoded.rgba[((4 * 20 + 5) * 4) + 3] === 255, "Semantic split URL image results should be downloaded and normalized onto opaque white before placement");
       const sameRatioSplitPixels = new Uint8Array(10 * 5 * 4);
       for (let i = 0; i < sameRatioSplitPixels.length; i += 4) {
         sameRatioSplitPixels[i] = 255;
@@ -1720,7 +1867,10 @@ async function runVmSmoke() {
       assert(splitLayerPrompt.includes("Do not crop") && splitLayerPrompt.includes("recenter"), "Semantic split prompt should forbid crop and recenter drift");
       assert(splitLayerPrompt.includes("manual PSD layer separation"), "Semantic split prompt should request careful manual-style layer separation");
       assert(splitLayerPrompt.includes("Do not include neighboring touching elements"), "Semantic split prompt should prevent merged neighboring elements");
-      assert(splitLayerPrompt.includes("Koukoutu background-removal"), "Semantic split prompt should ask for white matte before Koukoutu cutout");
+      assert(splitLayerPrompt.includes("pure opaque #FFFFFF white matte") && splitLayerPrompt.includes("final split output"), "Semantic split prompt should require an opaque white final layer for manual Photoshop cutout");
+      const transparentSplitPrompt = buildSemanticSplitLayerPrompt({ label: "弓身", target: "弓身" }, 0, 2, { width: 20, height: 20 }, { transparent: true });
+      assert(transparentSplitPrompt.includes("fully transparent alpha background") && transparentSplitPrompt.includes("do not add a white, black, checkerboard, or colored matte"), "Semantic split prompt should request a native transparent PNG without a matte");
+      assert(!splitLayerPrompt.includes("Koukoutu"), "Semantic split prompt must not depend on Koukoutu");
       assert(isTransientSemanticSplitLayerError(new Error('HTTP 502: Post "https://chatgpt.com/backend-api/codex/responses": EOF | upstream_error | invalid_request_error')), "Semantic split should retry Codex upstream 502 EOF failures");
       assert(!isTransientSemanticSplitLayerError(new Error("尺寸 10x10 与 Photoshop 画布 20x10 比例不一致")), "Semantic split should not retry deterministic canvas mismatch errors");
       const savedDecompressionStream = globalThis.DecompressionStream;
@@ -2116,6 +2266,7 @@ async function runVmSmoke() {
       assert(offlineStubDiagnostics.editCalls.some((call) => call.mode === "reference" && !call.hasMask && call.screenshotReferenceEdit), "Offline diagnostics should record selected reference as no-mask normal-upload edit");
       assert(offlineStubDiagnostics.editCalls.some((call) => call.mode === "inpaint" && !call.hasMask && call.screenshotReferenceEdit), "Offline diagnostics should record screenshot repaint as no-mask normal-upload edit");
       assert(offlineStubDiagnostics.editCalls.some((call) => call.mode === "outpaint" && call.hasMask && !call.screenshotReferenceEdit), "Offline diagnostics should still distinguish masked outpaint edits");
+      assert(Array.isArray(offlineStubDiagnostics.splitRegionCalls), "Offline diagnostics should expose semantic split coordinate-lock calls");
 
       const screenshotPrompt = buildImageEditPrompt("把弓上面的手去掉，其他不要变", "inpaintScreenshot");
       assert(screenshotPrompt.includes("普通上传图片"), "Selection repaint should describe a normal uploaded image reference");
@@ -2215,6 +2366,24 @@ async function runVmSmoke() {
       assert(state.results[0].placementRect.width === 100 && state.results[0].placementRect.height === 80, "Full-canvas reference run should preserve the original document placement rect");
       assert(state.results[0].normalizedPlacementSize === true, "Full-canvas reference run should preserve placement normalization metadata on the result card");
       currentSelection = { left: 10, top: 12, right: 50, bottom: 42, width: 40, height: 30 };
+      const referenceRegionCallsBeforeManual = referenceRegionInputCalls;
+      state.manualReferenceImage = {
+        b64: createOfflineDiagnosticPngBase64(6, 4, "manual-reference"),
+        format: "png",
+        name: "manual-reference.png",
+        width: 6,
+        height: 4,
+        bytes: 96,
+      };
+      state.mode = "reference";
+      $("promptInput").value = "manual reference prompt";
+      $("negativePromptInput").value = "隐藏负面词不应该进入参考图请求";
+      await runGeneration();
+      assert(referenceRegionInputCalls === referenceRegionCallsBeforeManual, "Manual reference image should take priority over the current Photoshop selection");
+      assert(calls.some((call) => call[0] === "edit" && call[1] === "reference" && call[2] === false && call[5] === true && call[6] === "6x4"), "Manual reference run should call no-mask image-first reference edit with reference metadata");
+      assert(calls.some((call) => call[0] === "edit" && call[1] === "reference" && call[5] === true && String(call[4]).includes("manual reference prompt") && !String(call[4]).includes("隐藏负面词不应该进入参考图请求")), "Manual reference run should ignore the hidden negative prompt field");
+      assert(state.results[0].placementMode === null && !state.results[0].placementRect && !state.results[0].targetRect, "Manual reference results should not be marked as Photoshop selection placement patches");
+      state.manualReferenceImage = null;
 
       assert(calls.some((call) => call[0] === "generate"), "generate branch");
       assert(calls.some((call) => call[0] === "edit" && call[1] === "reference" && call[2] === false && call[3] === true), "selected reference edit branch should use the no-mask normal-upload Responses path");
@@ -2256,7 +2425,11 @@ async function runVmSmoke() {
 
 async function main() {
   checkManifest();
-  checkRuntimeCopiesSynced();
+  if (process.env.OPENAI_PS_SKIP_RUNTIME_COPY_CHECK === "1") {
+    console.warn("Skipping runtime-copy sync check for isolated development copy");
+  } else {
+    checkRuntimeCopiesSynced();
+  }
   checkUiBindings();
   checkSmokeCommandCompatibility();
   checkRuntimeReloadScript();

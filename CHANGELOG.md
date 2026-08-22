@@ -2,7 +2,86 @@
 
 All notable changes to this project are documented here.
 
-## [0.1.297] - 2026-07-17
+## [0.1.309] - 2026-08-22
+
+### Changed
+
+- Temporarily removed the 拆图 mode from the visible mode selector.
+- Kept the underlying split implementation and historical split results intact for possible future reactivation.
+
+## [0.1.308] - 2026-08-22
+
+### Changed
+
+- Text-to-image generation now automatically places every returned image into the current Photoshop document as a new layer.
+- When “贴合当前选区” is enabled and a valid selection exists, automatic placement fits the generated image to that selection; otherwise it keeps the generated image's default size.
+
+## [0.1.307] - 2026-08-22
+
+### Changed
+
+- Generation errors now appear in a prominent, high-contrast alert with readable wrapped details, actionable hints, and a dismiss button instead of relying on the small status line.
+- Added a friendly explanation for Sub2API groups that have image generation disabled.
+
+## [0.1.306] - 2026-08-22
+
+### Changed
+
+- Semantic split now requests native transparent PNG output from `gpt-image-2`, preserves alpha and original canvas placement, and falls back to the existing white matte path when the upstream route does not support transparent backgrounds.
+
+## [0.1.305] - 2026-07-12
+
+### Fixed
+
+- After AI candidate matching, semantic split now asks Photoshop Select Subject to tighten non-base target bounds inside a temporary expanded source crop, then maps that real selection back to the working image before white-canvas placement.
+
+## [0.1.304] - 2026-07-12
+
+### Fixed
+
+- Candidate-to-source coordinate matching now removes the candidate's drifted full-canvas position and measures each tightly cropped redraw against an expanded, zoomed source crop before converting the local box back to Photoshop coordinates.
+
+## [0.1.303] - 2026-07-12
+
+### Fixed
+
+- Semantic split now performs a second coordinate match using both the original canvas and the actual isolated redraw candidates, so repeated assets and ambiguous labels are locked to the full matching source group instead of an approximate text-only box.
+
+## [0.1.302] - 2026-07-12
+
+### Fixed
+
+- Semantic split now measures every requested element on the original canvas before redraw, then locks the generated non-white content back into that source bounding box on an opaque full-canvas white layer.
+- Split history files are saved sequentially so concurrent local-storage updates cannot discard sibling layer records.
+
+## [0.1.301] - 2026-07-12
+
+### Changed
+
+- Semantic split now produces one faithful full-canvas opaque white-background redraw per semantic asset and places every result back at the original Photoshop canvas coordinates.
+- Split mode no longer requires or calls Koukoutu and no longer applies JavaScript white-threshold matting; users can remove the white background manually in Photoshop.
+- Split prompts now follow Unity-oriented semantic units: complete controls and reusable assets stay intact, base layers may repair covered surfaces, and ordinary elements must preserve their exact design, internal occupancy, scale, and position.
+
+## [0.1.300] - 2026-06-13
+
+### Fixed
+
+- Removed the stale CSS rule that still forced `#referenceContext` to `display: none !important`, which prevented the `参考图` picker from appearing even after it was moved into the prompt area.
+- Added explicit hidden overrides for reference-mode-only controls so selection-only rows cannot leak back into `参考图`.
+
+## [0.1.299] - 2026-06-13
+
+### Fixed
+
+- Moved the manual reference-image picker out of the unstable mode context container and into the main `参考图` prompt area, so the picker appears directly above the instruction textarea when reference mode is active.
+
+## [0.1.298] - 2026-06-12
+
+### Fixed
+
+- Fixed UXP panel visibility drift where `参考图` mode could still hide the reference picker or show selection-only controls despite the mode state being correct. Critical mode controls now use explicit hidden state plus inline `display: none !important` so Photoshop's UXP CSS overrides cannot resurrect hidden rows.
+
+## [0.1.297] - 2026-06-12
 
 ### Added
 
@@ -11,6 +90,7 @@ All notable changes to this project are documented here.
 
 ### Changed
 
+- Hid the prompt template button and any open template menu in `参考图` mode so the workflow stays focused on choosing a reference image and writing a direct instruction.
 - Restored the image quality selector with `auto`, `low`, `medium`, and `high` options and forwards the selected quality to supported image requests.
 - Simplified Cutout mode by hiding prompt and quality controls that are not used by the cutout request.
 - External ComfyUI Alpha results are imported back into the original Photoshop selection or canvas region with full-image fitting.
@@ -18,6 +98,32 @@ All notable changes to this project are documented here.
 ### Security
 
 - The external workflow contains no API key. The configured OpenAI API key is injected only at runtime.
+
+## [0.1.296] - 2026-06-12
+
+### Fixed
+
+- Fixed `参考图` mode hiding its new manual reference-image picker because the outer mode context panel stayed collapsed.
+
+### Changed
+
+- Simplified `参考图` mode controls: it now focuses on reference image, main instruction, size, count, and generation, while hiding the negative prompt, selection-size shortcut, and fit-selection checkbox that belong to selection-oriented workflows.
+
+## [0.1.295] - 2026-06-12
+
+### Added
+
+- Added manual reference-image selection to the `参考图` mode. Users can now pick a local PNG/JPG/WebP reference image directly in the panel; when present, it is used before Photoshop selection/canvas capture.
+
+### Changed
+
+- Separated `参考图` mode from `选区重绘`: manual reference images now use a normal image-first Responses edit prompt without Photoshop selection patch semantics, while selection repaint remains the only mode that captures a selected crop and places the result back at the same coordinates.
+
+## [0.1.294] - 2026-06-12
+
+### Added
+
+- Added a Windows x64 `.exe` installer build path for non-technical users. The installer embeds the plugin payload, installs it to `%APPDATA%\Adobe\UXP\Plugins\External\com.local.openai.photoshop.generator`, updates Photoshop's UXP plugin cache, and supports dry-run/uninstall modes.
 
 ## [0.1.293] - 2026-06-04
 

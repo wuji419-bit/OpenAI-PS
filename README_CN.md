@@ -1,13 +1,13 @@
 # OpenAI Photoshop Generator
 
-当前版本：**v0.1.297**
+当前版本：**v0.1.309**
 
 这是一个从零写的轻量版 Photoshop UXP 插件，目标是在 Photoshop 里直接完成 OpenAI 图像生成、局部重绘、扩图、拆图，以及通过抠抠图 API 做透明 PNG 抠图。
 
 ## 当前功能
 
 - 文生图：输入提示词生成图片。
-- 参考图编辑：把当前 Photoshop 画布导出为参考图，再交给 OpenAI 编辑。
+- 参考图编辑：可在面板里手动选择 PNG/JPG/WebP 参考图进行图生图；未选择手动参考图时，才会把当前 Photoshop 选区或整张画布导出为参考图。
 - 双图风格参考：参考图模式可额外选择“图二”；当前 Photoshop 画布或选区作为图一，通过用户自己运行的外部 ComfyUI GPT Image2 Alpha 工作流处理。
 - 选区重绘：读取当前 Photoshop 选区边界，导出白底截图参考图，通过 `/responses` 图像工具按普通上传图片编辑；正常大小的选区直接上传原始白底截图，只对极小选区补最小白边；不把选区作为 API mask 发送，返回后再按原选区放回新图层。
 - 扩图：按上、下、左、右边距生成扩图输入和 mask。
@@ -34,6 +34,39 @@
 - Windows Photoshop 插件存储目录：`%APPDATA%\Adobe\UXP\PluginsStorage\PHSP\27\External\com.local.openai.photoshop.generator`
 
 ## 安装方式
+
+### Windows 一键安装器
+
+给不会部署插件的用户，直接发送 `dist/OpenAI-PS-Installer-版本号-win-x64.exe`：
+
+1. 关闭 Photoshop。
+2. 双击运行安装器。
+3. 如果 Windows SmartScreen 提示未识别应用，点“更多信息”再点“仍要运行”。这是因为安装器未做代码签名。
+4. 安装结束后重新打开 Photoshop。
+5. 在 Photoshop 顶部菜单打开：`插件` > `OpenAI Photoshop Generator` > `OpenAI 图片`。
+
+安装器会把插件写入：
+
+`%APPDATA%\Adobe\UXP\Plugins\External\com.local.openai.photoshop.generator`
+
+并更新：
+
+`%APPDATA%\Adobe\UXP\PluginsInfo\v1\PS.json`
+
+维护者重新生成安装器：
+
+```bash
+npm run build:windows-installer
+```
+
+安装器也支持：
+
+```powershell
+OpenAI-PS-Installer-版本号-win-x64.exe --dry-run
+OpenAI-PS-Installer-版本号-win-x64.exe --uninstall
+```
+
+### 开发安装
 
 当前机器没有检测到 Adobe UPIA：
 
@@ -73,7 +106,7 @@
 6. `/responses` 图像工具的主控模型默认使用 `gpt-5.5`；如果服务返回 `model_not_available`，插件会自动尝试备用主控模型，但仍会把配置里的 `gpt-image-2` 保留在图像生成工具上。
 6. 选区重绘的提示词约束是通用规则：按用户文字识别要移除或修改的完整可见目标，并把用户明确说“不变/保持/保留/不要动”的内容当作保护参考，不依赖“手、弓”等特定对象词。
 7. `/chat/completions` 是聊天接口，不是标准图片接口。除非你的本地服务自己把聊天接口改成返回图片 base64，否则图片插件应使用图片接口。
-8. 选择模式，填写提示词。
+8. 选择模式，填写提示词；“参考图”模式可以先点“选择参考图”放入本机图片，“选区重绘”模式则读取 Photoshop 当前选区并按原位置放回。
 9. 点击“生成”。
 10. 在结果里点“导入”或先“选中”再“导入”。
 

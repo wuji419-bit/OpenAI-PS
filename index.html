@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenAI 图片</title>
-    <link rel="stylesheet" href="./src/styles.css?v=0.1.297" />
-    <script src="./src/app.js?v=0.1.297" defer></script>
+    <link rel="stylesheet" href="./src/styles.css?v=0.1.309" />
+    <script src="./src/app.js?v=0.1.309" defer></script>
   </head>
   <body>
     <main class="app-shell">
@@ -15,7 +15,7 @@
             <div class="title-inline">
               <span id="connectionBadge" class="connection-dot" aria-hidden="true" title="未配置 API Key"></span>
               <h1>OpenAI 图片</h1>
-              <span id="versionText" class="version-inline">v0.1.297</span>
+              <span id="versionText" class="version-inline">v0.1.309</span>
             </div>
             <button id="settingsToggleBtn" class="icon-button settings-entry-button" type="button" title="打开 API 设置" aria-label="打开 API 设置">
               设置
@@ -28,7 +28,6 @@
             <button type="button" data-mode="inpaint">选区重绘</button>
             <button type="button" data-mode="outpaint">扩图</button>
             <button type="button" data-mode="cutout">抠图</button>
-            <button type="button" data-mode="split">拆图</button>
           </nav>
         </header>
 
@@ -52,16 +51,6 @@
                 <div id="modeContextText" class="mode-context-text"></div>
               </div>
             </div>
-            <div id="referenceContext" class="mode-context-body hidden">
-              <div class="source-drop-zone">
-                <svg class="source-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M4.5 6.5h15v11h-15z" />
-                  <path d="m7.5 15 3-3 2.2 2.2 2.6-3.4 2.2 4.2" />
-                </svg>
-                <strong>无 Mask 参考图重绘</strong>
-                <span>有选区时导出选区上下文做图生图；没有选区时导出整张画布作为参考图。</span>
-              </div>
-            </div>
             <div id="selectionContext" class="mode-context-body hidden">
               <div class="source-drop-zone compact">
                 <svg class="source-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -81,6 +70,27 @@
                 <button id="useSelectionSizeBtn" class="mini-button" type="button" title="按当前选区匹配尺寸">选区尺寸</button>
                 <button id="clearPromptBtn" class="mini-button" type="button" title="清空提示词">清空</button>
                 <button id="promptPresetBtn" class="mini-button" type="button" title="提示词模板">模板</button>
+              </div>
+            </div>
+            <div id="referenceContext" class="reference-inline-panel hidden">
+              <button id="chooseReferenceImageBtn" class="source-drop-zone reference-source-button" type="button">
+                <svg class="source-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4.5 6.5h15v11h-15z" />
+                  <path d="m7.5 15 3-3 2.2 2.2 2.6-3.4 2.2 4.2" />
+                </svg>
+                <strong>选择参考图</strong>
+                <span id="manualReferenceSummary">可从本机选择 PNG / JPG / WebP；未选择时使用当前 Photoshop 选区或整张画布。</span>
+              </button>
+              <div id="manualReferencePreview" class="manual-reference-card hidden">
+                <img id="manualReferenceImage" alt="" />
+                <div class="manual-reference-info">
+                  <strong id="manualReferenceName">参考图</strong>
+                  <span id="manualReferenceMeta">未选择</span>
+                  <div class="manual-reference-actions">
+                    <button id="replaceReferenceImageBtn" class="mini-button" type="button">替换</button>
+                    <button id="clearReferenceImageBtn" class="mini-button" type="button">清除</button>
+                  </div>
+                </div>
               </div>
             </div>
             <div id="promptPresetMenu" class="preset-menu hidden"></div>
@@ -136,7 +146,7 @@
                 <option value="png">PNG</option>
               </select>
             </div>
-            <label class="checkbox-line" for="fitSelectionInput">
+            <label id="fitSelectionRow" class="checkbox-line" for="fitSelectionInput">
               <input id="fitSelectionInput" type="checkbox" checked />
               <span>贴合当前选区</span>
             </label>
@@ -167,6 +177,14 @@
               <div class="status-row"><span id="statusDot" class="status-dot" aria-hidden="true"></span><span id="statusBar" class="status-text">就绪</span></div>
               <button id="generateBtn" class="primary-button" type="button"><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3.5 7 13h4l-1 7.5L17 11h-4l.01-7.5Z" /></svg><span id="generateBtnLabel">生成</span></button>
               <button id="cancelRequestBtn" class="cancel-button hidden" type="button"><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7z" /></svg><span>停止</span></button>
+            </div>
+            <div id="errorAlert" class="error-alert hidden" role="alert" aria-live="assertive">
+              <div class="error-alert-head">
+                <div class="error-alert-title"><span class="error-alert-icon" aria-hidden="true">!</span><strong id="errorAlertTitle">生成失败</strong></div>
+                <button id="dismissErrorBtn" class="icon-button error-alert-dismiss" type="button" title="关闭错误提示" aria-label="关闭错误提示"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17" /></svg></button>
+              </div>
+              <div id="errorAlertMessage" class="error-alert-message"></div>
+              <div id="errorAlertHint" class="error-alert-hint"></div>
             </div>
             <div id="progressTrack" class="progress-track hidden"><div id="progressFill" class="progress-fill"></div></div>
             <div class="secondary-actions">
@@ -204,7 +222,7 @@
       <section id="settingsView" class="settings-view hidden">
         <header class="settings-header">
           <button id="settingsBackBtn" class="icon-button back-button" type="button" title="返回" aria-label="返回"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5" /></svg></button>
-          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.297</span></div>
+          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.309</span></div>
         </header>
         <div class="settings-scroll">
           <section class="settings-group">

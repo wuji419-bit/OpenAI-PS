@@ -12,7 +12,10 @@ const port = Number(process.env.UXP_DEVTOOLS_PORT || 14001);
 const timeoutMs = Number(process.env.PHOTOSHOP_LIVE_TIMEOUT_MS || 900000);
 const prompt = getArg("--prompt") || "招财猫, 宝箱, 开始挑战按钮";
 const negative = getArg("--negative") || "不要合并相邻元素，保持原始位置和比例";
+const baseUrlOverride = getArg("--base-url") || "";
+const setBaseUrlOnly = getArg("--set-base-url") || "";
 const preflightOnly = process.argv.includes("--preflight");
+const refineProbe = process.argv.includes("--refine-probe");
 const existingSessionId = getArg("--session") || process.env.OPENAI_PS_PLUGIN_SESSION_ID || "";
 
 function getArg(name) {
@@ -384,11 +387,20 @@ function panelSnapshotExpression() {
       baseUrl: s.baseUrl || "",
       doc: doc ? { title: doc.title || doc.name || "", width: Number(doc.width), height: Number(doc.height), layers: layers.length } : null,
       splitLayers: layers.filter((layer) => /^Split /.test(layer.name || "")).slice(0, 20),
+      splitResults: (state?.results || []).filter((item) => item?.mode === "split").slice(0, 20).map((item) => ({
+        id: item.id,
+        splitIndex: item.splitIndex,
+        splitLabel: item.splitLabel,
+        splitBounds: item.splitBounds,
+        coordinateLocked: !!item.coordinateLocked,
+        whiteMatteLayer: !!item.whiteMatteLayer,
+        transparentLayer: !!item.transparentLayer,
+      })),
     };
   })())`;
 }
 
-function startLiveSplitExpression(promptText, negativeText) {
+function startLiveSplitExpression(promptText, negativeText, baseUrl) {
   return `(() => {
     window.__liveSplitCheck = {
       done: false,
@@ -418,6 +430,10 @@ function startLiveSplitExpression(promptText, negativeText) {
     window.__liveSplitPromise = (async () => {
       try {
         if (state.busy) throw new Error("插件当前仍在忙，请等当前任务结束后再跑 live split");
+        if (${JSON.stringify(baseUrl)}) {
+          document.querySelector("#baseUrlInput").value = ${JSON.stringify(baseUrl)};
+          if (typeof saveSettings === "function") saveSettings();
+        }
         state.mode = "split";
         if (typeof updateModeUI === "function") updateModeUI();
         document.querySelector("#promptInput").value = ${JSON.stringify(promptText)};
@@ -434,6 +450,9 @@ function startLiveSplitExpression(promptText, negativeText) {
           importVisibleRect: item.importVisibleRect,
           targetRect: item.targetRect,
           placementRect: item.placementRect,
+          whiteMatteLayer: !!item.whiteMatteLayer,
+          transparentLayer: !!item.transparentLayer,
+          coordinateLocked: !!item.coordinateLocked,
           koukoutuMatte: !!item.koukoutuMatte,
           hasImportB64: !!item.importB64,
         }));
@@ -468,13 +487,20 @@ function liveStateExpression() {
   })())`;
 }
 
+function photoshopRefineProbeExpression() {
+  return `JSON.stringify(await refineSemanticSplitTargetsWithPhotoshop([
+    { label: "招财猫", target: "招财猫", region: { left: 25, top: 520, right: 111, bottom: 667, width: 86, height: 147 } },
+    { label: "宝箱", target: "宝箱", region: { left: 191, top: 680, right: 283, bottom: 746, width: 92, height: 66 } },
+    { label: "开始挑战按钮", target: "开始挑战按钮", region: { left: 104, top: 760, right: 388, bottom: 871, width: 284, height: 111 } }
+  ], { width: 461, height: 1024 }))`;
+}
+
 function assertLiveResult(snapshot, version) {
   if (snapshot.panelVersion !== `v${version}` || snapshot.pluginVersion !== version) {
     throw new Error(`Panel version mismatch: expected ${version}, got ${snapshot.panelVersion}/${snapshot.pluginVersion}`);
   }
   if (!snapshot.doc) throw new Error("No active Photoshop document");
   if (!snapshot.hasApiKey) throw new Error("Missing OpenAI API Key");
-  if (!snapshot.hasKoukoutuApiKey) throw new Error("Missing Koukoutu API Key");
 }
 
 function rectDelta(bounds, rect) {
@@ -492,12 +518,17 @@ function summarizePlacement(state) {
   return (state.results || []).map((item, index) => {
     const label = item.splitLabel ? `Split ${item.splitIndex} ${item.splitLabel}` : `Split Element ${item.splitIndex || index + 1}`;
     const layer = byName.get(label) || (state.layers || []).find((candidate) => candidate.name?.startsWith(`Split ${item.splitIndex} `));
-    const target = item.importVisibleRect || item.splitBounds;
+    const target = item.whiteMatteLayer
+      ? (item.placementRect || item.targetRect)
+      : (item.importVisibleRect || item.splitBounds);
     return {
       label,
       layerBounds: layer?.bounds || null,
       expectedBounds: target || null,
       maxDelta: rectDelta(layer?.bounds, target),
+      whiteMatteLayer: !!item.whiteMatteLayer,
+      transparentLayer: !!item.transparentLayer,
+      coordinateLocked: !!item.coordinateLocked,
       koukoutuMatte: !!item.koukoutuMatte,
       hasImportB64: !!item.hasImportB64,
     };
@@ -515,9 +546,23 @@ async function main() {
     const snapshot = await cdp.evaluateJson(panelSnapshotExpression());
     assertLiveResult(snapshot, version);
     console.log(`LIVE_SPLIT_PREFLIGHT ${JSON.stringify({ ...snapshot, session: debug.pluginSessionId })}`);
+    if (setBaseUrlOnly) {
+      const restored = await cdp.evaluateRaw(`(() => {
+        document.querySelector("#baseUrlInput").value = ${JSON.stringify(setBaseUrlOnly)};
+        if (typeof saveSettings === "function") saveSettings();
+        return document.querySelector("#baseUrlInput").value;
+      })()`);
+      console.log(`LIVE_SPLIT_BASE_URL_SET ${JSON.stringify(restored)}`);
+      return;
+    }
     if (preflightOnly) return;
+    if (refineProbe) {
+      const refined = await cdp.evaluateJson(photoshopRefineProbeExpression());
+      console.log(`LIVE_SPLIT_REFINE_PROBE ${JSON.stringify(refined)}`);
+      return;
+    }
 
-    await cdp.evaluateJson(startLiveSplitExpression(prompt, negative), false);
+    await cdp.evaluateJson(startLiveSplitExpression(prompt, negative, baseUrlOverride), false);
     let state = null;
     const start = Date.now();
     let lastStatus = "";
@@ -532,11 +577,11 @@ async function main() {
     }
     if (!state?.done) throw new Error(`Timed out waiting for live split; last status=${lastStatus || "(empty)"}`);
     if (state.error) throw new Error(`Live split failed: ${state.error}; status=${state.status || ""}`);
-    if (!/完成：已用 gpt-image-2 拆出/.test(state.status || "")) {
+    if (!/完成：已重绘 \d+ 个(?:透明 PNG|白底|透明 PNG\/白底)拆图层并按原坐标放回/.test(state.status || "")) {
       throw new Error(`Unexpected live split status: ${state.status || "(empty)"}`);
     }
     const placement = summarizePlacement(state);
-    const bad = placement.filter((item) => !(item.maxDelta <= 4) || !item.koukoutuMatte || !item.hasImportB64);
+    const bad = placement.filter((item) => !(item.maxDelta <= 4) || (!item.whiteMatteLayer && !item.transparentLayer) || !item.coordinateLocked || item.koukoutuMatte || !item.hasImportB64);
     console.log(`LIVE_SPLIT_RESULT ${JSON.stringify({ status: state.status, resultCount: state.results.length, layerCount: state.layers.length, placement })}`);
     if (bad.length) {
       throw new Error(`Live split placement/matte check failed: ${JSON.stringify(bad)}`);

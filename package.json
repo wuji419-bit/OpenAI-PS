@@ -1,0 +1,14 @@
+{
+  "name": "openai-photoshop-generator",
+  "version": "0.1.300",
+  "private": true,
+  "description": "OpenAI Photoshop Generator UXP plugin packaging helpers.",
+  "scripts": {
+    "check": "node --check src/app.js && node --check scripts/smoke-plugin.js && node --check scripts/build-windows-installer.js && node --check installer/windows-installer-runtime.cjs",
+    "smoke": "node scripts/smoke-plugin.js",
+    "build:windows-installer": "node scripts/build-windows-installer.js"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "6.20.0"
+  }
+}

@@ -8,7 +8,7 @@ const imaging = photoshop.imaging;
 const constants = photoshop.constants || {};
 const fs = storage.localFileSystem;
 const PLUGIN_ID = "com.local.openai.photoshop.generator";
-const PLUGIN_VERSION = "0.1.297";
+const PLUGIN_VERSION = "0.1.309";
 
 entrypoints.setup({
   panels: {
@@ -46,6 +46,7 @@ const SPLIT_ALPHA_THRESHOLD = 18;
 const MAX_SEMANTIC_SPLIT_GROUPS = 8;
 const MAX_SEMANTIC_SPLIT_TARGETS = 40;
 const MAX_SEMANTIC_SPLIT_TARGETS_PER_GROUP = 10;
+const MAX_SEMANTIC_SPLIT_REDRAWS_PER_MATCH = 8;
 const SEMANTIC_SPLIT_TRANSIENT_RETRY_DELAYS_MS = [1800, 4500];
 const SEMANTIC_SPLIT_SIDECAR_SETTLE_DELAY_MS = 650;
 const SMOKE_REQUEST_TIMEOUT_MS = 180000;
@@ -117,7 +118,7 @@ const MODE_META = {
   inpaint: { hint: "按当前选区进行局部重绘", label: "选区重绘" },
   outpaint: { hint: "向画布四周扩展内容", label: "扩图" },
   cutout: { hint: "把当前画布或选区抠成透明 PNG", label: "抠图" },
-  split: { hint: "用 gpt-image-2 识别元素并拆成独立图层", label: "拆图" },
+  split: { hint: "识别完整元素，重绘成原坐标透明 PNG 图层", label: "拆图" },
 };
 
 const state = {
@@ -126,6 +127,7 @@ const state = {
   results: [],
   history: [],
   selectedId: null,
+  manualReferenceImage: null,
   busy: false,
   progress: 0,
   progressVisible: false,
@@ -300,6 +302,10 @@ function bindEvents() {
 
   $("generateBtn").addEventListener("click", runGeneration);
   $("cancelRequestBtn").addEventListener("click", cancelCurrentGeneration);
+  $("dismissErrorBtn").addEventListener("click", dismissErrorAlert);
+  $("chooseReferenceImageBtn").addEventListener("click", chooseManualReferenceImage);
+  $("replaceReferenceImageBtn").addEventListener("click", chooseManualReferenceImage);
+  $("clearReferenceImageBtn").addEventListener("click", clearManualReferenceImage);
   const rememberPromptDraft = () => savePromptDraftForMode();
   ["beforeinput", "input", "change", "keyup", "blur", "focusout", "compositionend"].forEach((eventName) => {
     $("promptInput").addEventListener(eventName, rememberPromptDraft);
@@ -621,6 +627,10 @@ function restorePromptDraftForMode(mode = state.mode, options = {}) {
 
 function switchMode(mode) {
   if (!mode) return;
+  if (mode === "split") {
+    setStatus("拆图功能暂时停用");
+    return;
+  }
   if (mode === state.mode) {
     savePromptDraftForMode(mode);
     restorePromptDraftForMode(mode);
@@ -642,22 +652,51 @@ function updateKeyBadge() {
   $("quickApiKeyInput").value = $("apiKeyInput").value;
 }
 
+function setElementHidden(elementOrId, hidden) {
+  const element = typeof elementOrId === "string" ? $(elementOrId) : elementOrId;
+  if (!element) return;
+  if (hidden) {
+    element.classList?.add?.("hidden");
+    element.hidden = true;
+    if (element.style?.setProperty) {
+      element.style.setProperty("display", "none", "important");
+    } else if (element.style) {
+      element.style.display = "none";
+    }
+    return;
+  }
+  element.classList?.remove?.("hidden");
+  element.hidden = false;
+  if (element.style?.removeProperty) {
+    element.style.removeProperty("display");
+  } else if (element.style) {
+    element.style.display = "";
+  }
+}
+
 function updateModeUI() {
   document.querySelectorAll("[data-mode]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.mode === state.mode);
   });
 
-  $("outpaintControls").classList.toggle("hidden", state.mode !== "outpaint");
-  $("promptSection").classList.toggle("hidden", state.mode === "cutout");
-  $("sizeField").classList.toggle("hidden", state.mode === "inpaint" || state.mode === "cutout" || state.mode === "split");
-  $("qualityField").classList.toggle("hidden", state.mode === "cutout");
-  $("modeContextPanel").classList.add("hidden");
-  $("referenceContext").classList.toggle("hidden", state.mode !== "reference");
-  $("styleReferenceSection").classList.toggle("hidden", state.mode !== "reference");
-  $("selectionContext").classList.toggle(
-    "hidden",
-    state.mode !== "inpaint" && state.mode !== "outpaint" && state.mode !== "cutout" && state.mode !== "split"
-  );
+  const showReferenceContext = state.mode === "reference";
+  const showSelectionContext = state.mode === "inpaint" || state.mode === "outpaint" || state.mode === "cutout" || state.mode === "split";
+  const showNegativePrompt = isNegativePromptEnabledForMode(state.mode);
+  const showPromptPresets = isPromptPresetEnabledForMode(state.mode);
+  setElementHidden("outpaintControls", state.mode !== "outpaint");
+  setElementHidden("promptSection", state.mode === "cutout");
+  setElementHidden("sizeField", state.mode === "inpaint" || state.mode === "cutout" || state.mode === "split");
+  setElementHidden("qualityField", state.mode === "cutout");
+  setElementHidden("modeContextPanel", !showSelectionContext);
+  setElementHidden("referenceContext", !showReferenceContext);
+  setElementHidden("styleReferenceSection", !showReferenceContext);
+  setElementHidden("selectionContext", !showSelectionContext);
+  setElementHidden("negativePromptLabel", !showNegativePrompt);
+  setElementHidden("negativePromptInput", !showNegativePrompt);
+  setElementHidden("useSelectionSizeBtn", state.mode === "reference");
+  setElementHidden("promptPresetBtn", !showPromptPresets);
+  if (!showPromptPresets) setElementHidden("promptPresetMenu", true);
+  setElementHidden("fitSelectionRow", state.mode === "reference");
 
   const modeLabels = {
     generate: {
@@ -672,10 +711,10 @@ function updateModeUI() {
     reference: {
       icon: "▧",
       title: "参考图模式",
-      text: "使用当前 Photoshop 文档作为参考图，再按提示词进行变化。",
-      prompt: "修改提示词 (Prompt Modification)",
+      text: "优先使用手动选择的参考图；未选择时才使用当前 Photoshop 选区或整张画布。",
+      prompt: "修改/生成说明 (Prompt)",
       negative: "反向提示词 (Negative Prompt)",
-      placeholder: "描述如何修改或延展当前参考图...",
+      placeholder: "描述要参考这张图生成什么，或需要保留/修改哪些部分...",
       negativePlaceholder: "不希望改变或出现的内容...",
     },
     inpaint: {
@@ -710,11 +749,11 @@ function updateModeUI() {
   modeLabels.split = {
     icon: "S",
     title: "拆图",
-    text: "使用 gpt-image-2 先识别画面元素并输出白底完整画布，再自动拆成单独图层放回 Photoshop。",
+    text: "识别可独立使用的完整元素，逐个忠实重绘成透明 PNG，并按原坐标放回 Photoshop。",
     prompt: "拆图目标/说明 (可选)",
     negative: "辅助说明 (可选)",
-    placeholder: "留空自动识别；手动指定可用逗号或换行分隔，例如：角色，头发，尾巴，武器...",
-    negativePlaceholder: "例如：不要合并相邻道具、保留原始位置和比例...",
+    placeholder: "留空自动识别；也可指定完整资产，例如：角色，宝箱，开始按钮，底框...",
+    negativePlaceholder: "例如：不要合并相邻元素，不要改造设计，保持原始坐标和占位...",
   };
 
   const meta = modeLabels[state.mode] || modeLabels.generate;
@@ -725,6 +764,7 @@ function updateModeUI() {
   $("negativePromptLabel").textContent = meta.negative;
   $("promptInput").placeholder = meta.placeholder;
   $("negativePromptInput").placeholder = meta.negativePlaceholder;
+  renderManualReferenceImage();
 
   const hint = $("modeHint");
   if (hint) {
@@ -733,6 +773,68 @@ function updateModeUI() {
       : MODE_META[state.mode]?.hint || "直接生成新图";
   }
   renderStyleReference();
+}
+
+function isNegativePromptEnabledForMode(mode) {
+  return mode !== "reference";
+}
+
+function isPromptPresetEnabledForMode(mode) {
+  return mode !== "reference";
+}
+
+async function chooseManualReferenceImage() {
+  try {
+    const file = await fs.getFileForOpening({
+      types: ["png", "jpg", "jpeg", "webp"],
+      allowMultiple: false,
+    });
+    if (!file) return;
+    const buffer = await file.read({ format: storage.formats.binary });
+    const bytes = new Uint8Array(buffer);
+    const format = inferImageFormatFromBytes(bytes) || inferImageFormatFromValue(file.name || "");
+    if (!["png", "jpeg", "webp"].includes(format)) {
+      throw new Error("请选择 PNG、JPG 或 WebP 图片");
+    }
+    const imageSize = getValidatedImageSize(buffer, format);
+    state.manualReferenceImage = {
+      b64: arrayBufferToBase64(buffer),
+      format,
+      name: file.name || `reference.${fileExtensionForFormat(format)}`,
+      width: imageSize.width,
+      height: imageSize.height,
+      bytes: buffer.byteLength || bytes.length,
+    };
+    renderManualReferenceImage();
+    setStatus(`已选择参考图：${state.manualReferenceImage.name} · ${imageSize.width}x${imageSize.height}`);
+  } catch (error) {
+    console.error("[reference] choose reference image failed", error);
+    setStatus(`参考图读取失败：${error.message || error}`);
+  }
+}
+
+function clearManualReferenceImage() {
+  state.manualReferenceImage = null;
+  renderManualReferenceImage();
+  setStatus("已清除手动参考图；参考图模式将使用 Photoshop 选区或整张画布");
+}
+
+function renderManualReferenceImage() {
+  const reference = state.manualReferenceImage;
+  const hasReference = Boolean(reference?.b64);
+  $("manualReferencePreview").classList.toggle("hidden", !hasReference);
+  $("manualReferenceSummary").textContent = hasReference
+    ? "将优先使用下方手动参考图；清除后才会使用 Photoshop 选区或整张画布。"
+    : "可从本机选择 PNG / JPG / WebP；未选择时使用当前 Photoshop 选区或整张画布。";
+  if (!hasReference) {
+    $("manualReferenceImage").removeAttribute("src");
+    $("manualReferenceName").textContent = "参考图";
+    $("manualReferenceMeta").textContent = "未选择";
+    return;
+  }
+  $("manualReferenceImage").src = toDataUrl(reference.b64, reference.format || "png");
+  $("manualReferenceName").textContent = reference.name || "参考图";
+  $("manualReferenceMeta").textContent = `${reference.width || "?"}x${reference.height || "?"} · ${formatBytes(reference.bytes || estimateBase64Bytes(reference.b64))}`;
 }
 
 function applyDocumentPaddingPreset() {
@@ -772,7 +874,7 @@ function clearPrompts() {
   $("promptInput").value = "";
   $("negativePromptInput").value = "";
   savePromptDraftForMode(state.mode, { explicitEmpty: true });
-  $("promptPresetMenu").classList.add("hidden");
+  setElementHidden("promptPresetMenu", true);
   setStatus("提示词已清空");
 }
 
@@ -789,16 +891,24 @@ function renderPromptPresets() {
 }
 
 function togglePresetMenu() {
+  if (!isPromptPresetEnabledForMode(state.mode)) {
+    setElementHidden("promptPresetMenu", true);
+    return;
+  }
   $("promptPresetMenu").classList.toggle("hidden");
 }
 
 function applyPromptPreset(preset) {
+  if (!isPromptPresetEnabledForMode(state.mode)) {
+    setElementHidden("promptPresetMenu", true);
+    return;
+  }
   $("promptInput").value = preset.prompt;
   if (!$("negativePromptInput").value.trim()) {
     $("negativePromptInput").value = preset.negative || "";
   }
   savePromptDraftForMode();
-  $("promptPresetMenu").classList.add("hidden");
+  setElementHidden("promptPresetMenu", true);
   setStatus(`已应用模板：${preset.label}`);
 }
 
@@ -915,10 +1025,6 @@ async function runGeneration() {
     setStatus("请先在设置里填写抠抠图 API Key");
     return;
   }
-  if (state.mode === "split" && !settings.koukoutuApiKey) {
-    setStatus("拆图现在会用抠抠图做透明抠像，请先在设置里填写抠抠图 API Key");
-    return;
-  }
   if (!settings.apiKey && !isComfyModel(settings.model) && state.mode !== "cutout") {
     setStatus("请先填写 OpenAI API Key");
     return;
@@ -932,7 +1038,11 @@ async function runGeneration() {
   }
 
   savePromptDraftForMode();
-  const prompt = buildPrompt(rawPrompt || (useStyleReferenceWorkflow ? DEFAULT_GPT_IMAGE2_ALPHA_PROMPT : "auto"), $("negativePromptInput").value.trim());
+  const negativePrompt = isNegativePromptEnabledForMode(state.mode) ? $("negativePromptInput").value.trim() : "";
+  const prompt = buildPrompt(
+    rawPrompt || (useStyleReferenceWorkflow ? DEFAULT_GPT_IMAGE2_ALPHA_PROMPT : "auto"),
+    negativePrompt
+  );
   saveSettings();
   const runController = createAbortController();
   state.activeRequestController = runController;
@@ -978,6 +1088,28 @@ async function runGeneration() {
           placementRect: alphaInput.placementRect,
           cropRect: null,
           skipPreviewCrop: true,
+        }));
+      } else if (state.manualReferenceImage?.b64) {
+        setStatus(`正在使用手动参考图：${state.manualReferenceImage.name || "reference"}`);
+        const reference = await createManualReferenceInputs(settings);
+        outputSize = reference.displaySize;
+        setProgress(40, true);
+        items = await requestEdits(
+          settings,
+          buildImageEditPrompt(prompt, "reference"),
+          reference.image,
+          null,
+          {
+            size: reference.apiSize,
+            manualReferenceEdit: true,
+            referenceSize: reference.displaySize,
+          }
+        );
+        items = (items || []).map((item) => ({
+          ...item,
+          placementMode: null,
+          targetRect: null,
+          placementRect: null,
         }));
       } else if (isSelectionValid(selection)) {
         setStatus("正在导出选区上下文作为无 Mask 参考图...");
@@ -1099,7 +1231,7 @@ async function runGeneration() {
       setProgress(18, true);
       const docSize = getDocumentSize();
       const fullRect = { left: 0, top: 0, right: docSize.width, bottom: docSize.height, width: docSize.width, height: docSize.height };
-      setStatus("正在导出当前画布给 gpt-image-2 拆图...");
+      setStatus("正在导出当前画布，准备逐元素透明 PNG 重绘拆图...");
       const splitInput = await exportActiveDocumentForSplit(docSize);
       const image = splitInput.image;
       const splitSettings = {
@@ -1143,7 +1275,10 @@ async function runGeneration() {
       splitIndex: item.splitIndex || null,
       splitLabel: item.splitLabel || null,
       splitBounds: item.splitBounds || null,
+      coordinateLocked: Boolean(item.coordinateLocked),
       whiteMatteMask: Boolean(item.whiteMatteMask),
+      whiteMatteLayer: Boolean(item.whiteMatteLayer),
+      transparentLayer: Boolean(item.transparentLayer),
       koukoutuMatte: Boolean(item.koukoutuMatte),
       preclippedImport: Boolean(item.preclippedImport),
       previewB64: item.previewB64 || null,
@@ -1163,13 +1298,44 @@ async function runGeneration() {
     setProgress(88, true);
     throwIfCancelled();
     renderResults();
-    const historyUpdates = await Promise.all(stamped.map(saveHistoryItem));
+    const historyUpdates = [];
+    for (const item of stamped) {
+      historyUpdates.push(await saveHistoryItem(item));
+    }
     if (historyUpdates.some(Boolean)) {
       await prepareCroppedPreviews(stamped);
       renderResults();
     }
     throwIfCancelled();
-    if (state.mode === "cutout" && stamped[0]) {
+    if (state.mode === "generate" && stamped.length) {
+      setProgress(92, true);
+      setStatus(`正在把 ${stamped.length} 张生成结果放入当前文档...`);
+      let autoPlacementRect = null;
+      if ($("fitSelectionInput").checked) {
+        try {
+          const liveSelection = await getSelectionInfo();
+          if (isSelectionValid(liveSelection)) {
+            autoPlacementRect = liveSelection;
+          }
+        } catch (error) {
+          console.warn("[generate] active selection lookup failed; placing at default size", error);
+        }
+      }
+      for (let index = 0; index < stamped.length; index += 1) {
+        const item = stamped[index];
+        await placeResultAsLayer(
+          item,
+          autoPlacementRect,
+          stamped.length > 1 ? `OpenAI Image ${index + 1}` : "OpenAI Image",
+          null,
+          {
+            fitByImageSize: Boolean(autoPlacementRect),
+            moveToFront: true,
+          }
+        );
+        setProgress(92 + Math.round(((index + 1) / stamped.length) * 7), true);
+      }
+    } else if (state.mode === "cutout" && stamped[0]) {
       setProgress(92, true);
       setStatus("正在把抠图结果放回原位置...");
       await placeResultAsLayer(stamped[0], stamped[0].placementRect || stamped[0].targetRect, "Koukoutu Cutout", null, { preserveImageAspect: true });
@@ -1212,12 +1378,15 @@ async function runGeneration() {
       }
     } else if (state.mode === "split" && stamped.length) {
       setProgress(92, true);
-      setStatus(`正在把 ${stamped.length} 个拆图元素放回 Photoshop 图层...`);
+      const splitLayerKind = stamped.every((item) => item.transparentLayer)
+        ? "透明 PNG"
+        : stamped.some((item) => item.transparentLayer) ? "透明 PNG/白底" : "白底";
+      setStatus(`正在把 ${stamped.length} 个${splitLayerKind}拆图层按原坐标放回 Photoshop...`);
       for (let index = 0; index < stamped.length; index += 1) {
         const item = stamped[index];
         await placeResultAsLayer(item, item.placementRect || item.targetRect, buildSplitLayerName(item, index + 1), null, {
           fitByImageSize: true,
-          alignVisibleRect: true,
+          alignVisibleRect: false,
         });
         setProgress(92 + Math.round(((index + 1) / stamped.length) * 7), true);
       }
@@ -1232,7 +1401,7 @@ async function runGeneration() {
       : state.mode === "outpaint"
       ? "完成：已扩展画布并放回扩图结果"
       : state.mode === "split"
-      ? `完成：已用 gpt-image-2 拆出 ${stamped.length} 个独立图层`
+      ? `完成：已重绘 ${stamped.length} 个${stamped.every((item) => item.transparentLayer) ? "透明 PNG" : stamped.some((item) => item.transparentLayer) ? "透明 PNG/白底" : "白底"}拆图层并按原坐标放回`
       : `完成：生成 ${stamped.length} 张`));
   } catch (error) {
     if (isCancelError(error)) {
@@ -1277,8 +1446,11 @@ async function runSixModeSmoke() {
   const originalNegativePrompt = $("negativePromptInput").value;
   const originalRequestTimeoutMs = state.requestTimeoutMs;
   const originalPromptDraftSaveSuspended = state.promptDraftSaveSuspended;
+  const originalManualReferenceImage = state.manualReferenceImage;
   state.requestTimeoutMs = SMOKE_REQUEST_TIMEOUT_MS;
   state.promptDraftSaveSuspended = true;
+  state.manualReferenceImage = null;
+  renderManualReferenceImage();
   console.log("[OpenAI Photoshop Generator] smoke start");
 
   try {
@@ -1309,10 +1481,12 @@ async function runSixModeSmoke() {
   } finally {
     state.requestTimeoutMs = originalRequestTimeoutMs;
     state.promptDraftSaveSuspended = originalPromptDraftSaveSuspended;
+    state.manualReferenceImage = originalManualReferenceImage;
     state.mode = originalMode;
     $("promptInput").value = originalPrompt;
     $("negativePromptInput").value = originalNegativePrompt;
     updateModeUI();
+    renderManualReferenceImage();
     console.log("[OpenAI Photoshop Generator] smoke finished");
   }
 }
@@ -1350,6 +1524,9 @@ async function runOfflineSixModeDiagnostics() {
           updateModeUI();
           $("promptInput").value = prompt;
           $("negativePromptInput").value = mode === "inpaint" ? "不要改变弓、箭头、线条、颜色" : "";
+          if (mode === "split") {
+            $("koukoutuApiKeyInput").value = "";
+          }
           if (mode === "reference" || mode === "inpaint") {
             await selectSmokeRect();
           }
@@ -1465,6 +1642,7 @@ function captureOfflineDiagnosticState() {
     mode: state.mode,
     requestTimeoutMs: state.requestTimeoutMs,
     promptDraftSaveSuspended: state.promptDraftSaveSuspended,
+    manualReferenceImage: state.manualReferenceImage,
     fields: Object.fromEntries(fieldIds.map((id) => [id, $(id)?.value || ""])),
   };
 }
@@ -1472,14 +1650,18 @@ function captureOfflineDiagnosticState() {
 function restoreOfflineDiagnosticState(restore) {
   state.requestTimeoutMs = restore.requestTimeoutMs;
   state.promptDraftSaveSuspended = restore.promptDraftSaveSuspended;
+  state.manualReferenceImage = restore.manualReferenceImage || null;
   state.mode = restore.mode;
   for (const [id, value] of Object.entries(restore.fields || {})) {
     if ($(id)) $(id).value = value;
   }
   updateModeUI();
+  renderManualReferenceImage();
 }
 
 function applyOfflineDiagnosticSettings() {
+  state.manualReferenceImage = null;
+  renderManualReferenceImage();
   $("apiKeyInput").value = "sk-offline-diagnostic";
   $("koukoutuApiKeyInput").value = "offline-diagnostic";
   $("countInput").value = "1";
@@ -1494,6 +1676,7 @@ async function withOfflineDiagnosticStubs(callback) {
     editCalls: [],
     cutoutCalls: [],
     splitCalls: [],
+    splitRegionCalls: [],
     expandCanvasCalls: [],
     placeCalls: [],
   };
@@ -1501,6 +1684,7 @@ async function withOfflineDiagnosticStubs(callback) {
     requestGenerations,
     requestEdits,
     requestKoukoutuCutout,
+    requestSemanticSplitTargetRegions,
     requestSemanticSplitLayers,
     expandCanvasForOutpaint,
     placeResultAsLayer,
@@ -1556,18 +1740,38 @@ async function withOfflineDiagnosticStubs(callback) {
       format: "png",
     };
   };
+  requestSemanticSplitTargetRegions = async (settings, imageB64, docSize, targets) => {
+    const width = Math.max(1, Math.round(docSize?.width || 512));
+    const height = Math.max(1, Math.round(docSize?.height || 512));
+    const regions = (targets || []).map((target, index) => ({
+      index,
+      label: target.label || `离线元素${index + 1}`,
+      present: true,
+      region: {
+        left: Math.min(width - 1, 24 + index * 32),
+        top: Math.min(height - 1, 30 + index * 36),
+        right: Math.min(width, 120 + index * 32),
+        bottom: Math.min(height, 150 + index * 36),
+        width: Math.max(1, Math.min(width, 120 + index * 32) - Math.min(width - 1, 24 + index * 32)),
+        height: Math.max(1, Math.min(height, 150 + index * 36) - Math.min(height - 1, 30 + index * 36)),
+      },
+      confidence: 1,
+    }));
+    diagnostics.splitRegionCalls.push({ mode: state.mode, count: regions.length });
+    return regions;
+  };
   requestSemanticSplitLayers = async (settings, imageB64, docSize, targets) => {
     const width = Math.max(1, Math.round(docSize?.width || getPngDimensionsFromBase64(imageB64)?.width || 512));
     const height = Math.max(1, Math.round(docSize?.height || getPngDimensionsFromBase64(imageB64)?.height || 512));
     const items = (targets || [{ label: "离线元素", target: "offline element" }]).slice(0, 2).map((target, index) => ({
-      b64: createOfflineDiagnosticPngBase64(width, height, `split-${index}`, { transparent: true, offset: index }),
+      b64: createOfflineDiagnosticPngBase64(width, height, `split-${index}`, { whiteMatte: true, offset: index }),
       format: "png",
       splitIndex: index + 1,
       splitLabel: target.label || `离线元素${index + 1}`,
       targetRect: { left: 0, top: 0, right: width, bottom: height, width, height },
       placementRect: { left: 0, top: 0, right: width, bottom: height, width, height },
       importVisibleRect: { left: 0, top: 0, right: width, bottom: height, width, height },
-      koukoutuMatte: true,
+      whiteMatteLayer: true,
     }));
     diagnostics.splitCalls.push({
       mode: state.mode,
@@ -1642,6 +1846,7 @@ async function withOfflineDiagnosticStubs(callback) {
     requestGenerations = originals.requestGenerations;
     requestEdits = originals.requestEdits;
     requestKoukoutuCutout = originals.requestKoukoutuCutout;
+    requestSemanticSplitTargetRegions = originals.requestSemanticSplitTargetRegions;
     requestSemanticSplitLayers = originals.requestSemanticSplitLayers;
     expandCanvasForOutpaint = originals.expandCanvasForOutpaint;
     placeResultAsLayer = originals.placeResultAsLayer;
@@ -2122,6 +2327,9 @@ async function requestSingleGeneration(settings, prompt) {
     size: settings.size,
     quality: settings.quality,
     output_format: settings.format,
+    ...(normalizeImageBackground(settings.background)
+      ? { background: normalizeImageBackground(settings.background) }
+      : {}),
   });
 
   const generationUrl = buildApiUrl(settings.baseUrl, settings.generationPath);
@@ -2199,6 +2407,7 @@ async function requestResponsesTextImageGeneration(settings, prompt) {
         size: settings.size || "auto",
         quality: normalizeResponsesImageQuality(settings.quality),
         output_format: normalizeImageOutputFormat(settings.format),
+        ...(normalizeImageBackground(settings.background) ? { background: normalizeImageBackground(settings.background) } : {}),
       },
     ],
     tool_choice: { type: "image_generation" },
@@ -2241,15 +2450,140 @@ function buildSplitImagePrompt(userPrompt) {
 async function resolveSemanticSplitTargets(settings, imageB64, docSize, userPrompt) {
   const explicit = buildExplicitSemanticSplitTargets(userPrompt);
   if (explicit.length >= 1) {
-    return explicit;
+    return enrichSemanticSplitTargetRegions(settings, imageB64, docSize, explicit);
   }
 
   const autoTargets = await requestGptSplitTargets(settings, imageB64, docSize, userPrompt);
   if (autoTargets.length >= 2) {
-    return autoTargets;
+    return enrichSemanticSplitTargetRegions(settings, imageB64, docSize, autoTargets);
   }
 
-  return DEFAULT_SEMANTIC_SPLIT_TARGETS;
+  return enrichSemanticSplitTargetRegions(settings, imageB64, docSize, DEFAULT_SEMANTIC_SPLIT_TARGETS);
+}
+
+async function enrichSemanticSplitTargetRegions(settings, imageB64, docSize, targets) {
+  const normalizedTargets = normalizeSemanticSplitTargets(targets);
+  if (!normalizedTargets.length || !settings?.apiKey || !settings?.baseUrl) {
+    return normalizedTargets;
+  }
+
+  try {
+    setStatus(`正在锁定 ${normalizedTargets.length} 个拆图元素的原始坐标...`);
+    const located = await requestSemanticSplitTargetRegions(settings, imageB64, docSize, normalizedTargets);
+    const regionsByIndex = new Map(located.map((item) => [item.index, item]));
+    return normalizedTargets.map((target, index) => {
+      const locatedTarget = regionsByIndex.get(index);
+      if (!locatedTarget?.present || !locatedTarget.region) return target;
+      return {
+        ...target,
+        region: locatedTarget.region,
+        regionConfidence: locatedTarget.confidence,
+        coordinateLocked: true,
+      };
+    });
+  } catch (error) {
+    console.warn("GPT split target coordinate analysis failed", error);
+    return normalizedTargets;
+  }
+}
+
+async function requestSemanticSplitTargetRegions(settings, imageB64, docSize, targets) {
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      elements: {
+        type: "array",
+        maxItems: MAX_SEMANTIC_SPLIT_TARGETS,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            index: { type: "integer" },
+            label: { type: "string" },
+            present: { type: "boolean" },
+            left: { type: "number" },
+            top: { type: "number" },
+            right: { type: "number" },
+            bottom: { type: "number" },
+            confidence: { type: "number" },
+          },
+          required: ["index", "label", "present", "left", "top", "right", "bottom", "confidence"],
+        },
+      },
+    },
+    required: ["elements"],
+  };
+
+  const targetList = targets.map((target, index) => [
+    `${index}: ${target.label}`,
+    `description=${target.target}`,
+    target.groupLabel ? `group=${target.groupLabel}` : "",
+  ].filter(Boolean).join(" | ")).join("\n");
+  const payload = {
+    model: DEFAULT_SEMANTIC_EDIT_MODEL,
+    input: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: [
+              "Return JSON only. Locate each requested Photoshop layer target in the original input image.",
+              "For every indexed target, return the tight outermost visible pixel bounding box in original-canvas pixel coordinates.",
+              "Include the complete authored object and its own shadow, glow, holes, protrusions, and antialiased edge. Exclude neighboring objects, labels, panels, and background pixels.",
+              "Do not redesign, infer a new layout, or report where an isolated redraw should be placed. Measure only the target's current location and occupied size in this exact source image.",
+              "If several separate instances match a singular target, choose the most prominent complete instance. Use one union box only when the target explicitly requests all instances or a grouped layer.",
+              "Set present=false when the target is not visible; still return zero for all four coordinates.",
+              `Canvas size: ${Math.max(1, Math.round(docSize?.width || 1))} x ${Math.max(1, Math.round(docSize?.height || 1))}.`,
+              "Targets:",
+              targetList,
+            ].join("\n"),
+          },
+          {
+            type: "input_image",
+            image_url: toDataUrl(imageB64, inferImageFormatFromValue(imageB64) || "png"),
+            detail: "high",
+          },
+        ],
+      },
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "semantic_split_target_regions",
+        strict: true,
+        schema,
+      },
+    },
+  };
+
+  const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${settings.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  }, "GPT 拆图元素原始坐标识别");
+  if (!response.ok) return [];
+
+  const plan = parseJsonFromResponseOutput(parseResponsesJsonText(await response.text()));
+  return (Array.isArray(plan?.elements) ? plan.elements : [])
+    .map((item) => {
+      const index = Math.round(toNumber(item?.index));
+      const present = Boolean(item?.present);
+      const region = present ? normalizeSemanticSplitRegion(item, docSize) : null;
+      return {
+        index,
+        label: cleanSemanticSplitLabel(item?.label, `元素${index + 1}`),
+        present,
+        region,
+        confidence: Math.max(0, Math.min(1, toNumber(item?.confidence) || 0)),
+      };
+    })
+    .filter((item) => Number.isInteger(item.index) && item.index >= 0 && item.index < targets.length)
+    .filter((item) => !item.present || Boolean(item.region));
 }
 
 function buildExplicitSemanticSplitTargets(userPrompt) {
@@ -2681,21 +3015,28 @@ function normalizeSemanticSplitTargets(elements) {
 
 async function requestSemanticSplitLayers(settings, imageB64, docSize, targets) {
   const results = [];
+  const candidates = [];
   const skipped = [];
   const total = Math.max(1, targets.length);
+  const transparentPreferred = shouldUseTransparentSemanticSplit(settings);
 
   for (let index = 0; index < total; index += 1) {
     const target = targets[index];
     setProgress(45 + Math.round((index / total) * 36), true);
-    setStatus(`正在用 gpt-image-2 抽取拆图层 ${index + 1}/${total}：${target.label}`);
-    const prompt = buildSemanticSplitLayerPrompt(target, index, total, docSize);
+    setStatus(`正在用 gpt-image-2 ${transparentPreferred ? "透明 PNG" : "白底"}重绘拆图层 ${index + 1}/${total}：${target.label}`);
+    const prompt = buildSemanticSplitLayerPrompt(target, index, total, docSize, { transparent: transparentPreferred });
     try {
       await settleBeforeSemanticSplitLayerRequest(settings, index);
-      const batch = await requestSemanticSplitLayerBatchWithRetry(settings, prompt, imageB64, target, index, total);
-      const item = await normalizeSemanticSplitLayerItem(batch[0], docSize, target.label, index + 1, settings);
-      if (item) {
-        results.push(item);
-      }
+      const batch = await requestSemanticSplitLayerBatchWithRetry(
+        settings,
+        prompt,
+        imageB64,
+        target,
+        index,
+        total,
+        { transparentPreferred }
+      );
+      if (batch[0]) candidates.push({ sourceItem: batch[0], target, index });
     } catch (error) {
       console.warn(`[split] skipped layer ${index + 1}/${total} ${target.label}`, error);
       skipped.push({ target, error });
@@ -2703,16 +3044,47 @@ async function requestSemanticSplitLayers(settings, imageB64, docSize, targets) 
     }
   }
 
+  let refinedByIndex = new Map();
+  if (candidates.length) {
+    try {
+      setStatus(`正在把 ${candidates.length} 个拆图候选与原图逐一对位...`);
+      const refined = await requestSemanticSplitRedrawRegions(settings, imageB64, docSize, candidates);
+      refinedByIndex = new Map(refined.map((item) => [item.index, item]));
+    } catch (error) {
+      console.warn("GPT split redraw coordinate matching failed", error);
+    }
+  }
+
+  const matchedCandidates = candidates.map((candidate) => {
+    const refined = refinedByIndex.get(candidate.index);
+    const target = refined?.region
+      ? { ...candidate.target, region: refined.region, coordinateLocked: true, regionConfidence: refined.confidence }
+      : candidate.target;
+    return { ...candidate, target };
+  });
+  const photoshopRefinedTargets = await refineSemanticSplitTargetsWithPhotoshop(
+    matchedCandidates.map((candidate) => candidate.target),
+    docSize
+  );
+
+  for (let candidateIndex = 0; candidateIndex < matchedCandidates.length; candidateIndex += 1) {
+    const candidate = matchedCandidates[candidateIndex];
+    const target = photoshopRefinedTargets[candidateIndex] || candidate.target;
+    try {
+      const item = await normalizeSemanticSplitLayerItem(candidate.sourceItem, docSize, target.label, candidate.index + 1, settings, target);
+      if (item) results.push(item);
+    } catch (error) {
+      console.warn(`[split] skipped normalized layer ${candidate.index + 1}/${total} ${target.label}`, error);
+      skipped.push({ target, error });
+    }
+  }
+
   if (!results.length) {
     setStatus("语义拆图没有得到有效图层，正在尝试整体白底拆分...");
     const fallbackPrompt = buildSplitImagePrompt(targets.map((target) => target.label).join("，"));
     const fallback = await requestEdits(settings, fallbackPrompt, imageB64, null, { size: "auto" });
-    if (settings?.koukoutuApiKey) {
-      const fallbackB64 = await createSemanticSplitWhiteCanvasBase64(fallback[0], docSize, "整体拆图结果");
-      setStatus("正在用抠抠图透明化整体拆图结果...");
-      return splitGeneratedImageIntoElementItems(await requestKoukoutuCutout(settings, fallbackB64), docSize);
-    }
-    return splitGeneratedImageIntoElementItems(fallback[0], docSize);
+    const fallbackItem = await normalizeSemanticSplitLayerItem(fallback[0], docSize, "整体拆图结果", 1, null);
+    return fallbackItem ? [fallbackItem] : [];
   }
 
   if (skipped.length) {
@@ -2721,6 +3093,292 @@ async function requestSemanticSplitLayers(settings, imageB64, docSize, targets) 
   }
 
   return results;
+}
+
+async function refineSemanticSplitTargetsWithPhotoshop(targets, sourceSize) {
+  if (!app.activeDocument || !Array.isArray(targets) || !targets.length) return targets;
+  const sourceDoc = app.activeDocument;
+  const documentWidth = Math.max(1, Math.round(toNumber(sourceDoc.width) || 1));
+  const documentHeight = Math.max(1, Math.round(toNumber(sourceDoc.height) || 1));
+  const sourceWidth = Math.max(1, Math.round(toNumber(sourceSize?.width) || documentWidth));
+  const sourceHeight = Math.max(1, Math.round(toNumber(sourceSize?.height) || documentHeight));
+  const fullDocumentRect = {
+    left: 0,
+    top: 0,
+    right: documentWidth,
+    bottom: documentHeight,
+    width: documentWidth,
+    height: documentHeight,
+  };
+  const refinedTargets = [];
+
+  for (let index = 0; index < targets.length; index += 1) {
+    const target = targets[index];
+    if (!target?.region || isSemanticBaseLayer(target)) {
+      refinedTargets.push(target);
+      continue;
+    }
+
+    const documentRegion = roundRectToPixels(mapImageRectToDocumentRect(
+      target.region,
+      fullDocumentRect,
+      sourceWidth,
+      sourceHeight
+    ));
+    const cropRect = expandPhotoshopSubjectMatchRegion(documentRegion, documentWidth, documentHeight);
+    let duplicateDoc = null;
+    let selection = null;
+    try {
+      setStatus(`正在用 Photoshop 收紧原图边界 ${index + 1}/${targets.length}：${target.label}`);
+      await core.executeAsModal(async () => {
+        duplicateDoc = await sourceDoc.duplicate(`OpenAI split subject ${index + 1}`, true);
+        try {
+          await cropDocumentToRect(duplicateDoc, cropRect);
+          await action.batchPlay([
+            {
+              _obj: "autoCutout",
+              sampleAllLayers: true,
+              _options: { dialogOptions: "dontDisplay" },
+            },
+          ], { modalBehavior: "execute" });
+          const result = await action.batchPlay([
+            {
+              _obj: "get",
+              _target: [
+                { _property: "selection" },
+                { _ref: "document", _id: duplicateDoc._id },
+              ],
+              _options: { dialogOptions: "dontDisplay" },
+            },
+          ], { synchronousExecution: true, modalBehavior: "execute" });
+          selection = normalizePhotoshopSelectionDescriptor(result[0]?.selection);
+        } finally {
+          if (duplicateDoc) await duplicateDoc.closeWithoutSaving();
+        }
+      }, { commandName: `Refine split subject ${index + 1}` });
+    } catch (error) {
+      console.warn(`[split] Photoshop subject boundary refinement failed for ${target.label}`, error);
+    }
+
+    if (!isUsablePhotoshopSubjectSelection(selection, cropRect, documentRegion)) {
+      refinedTargets.push(target);
+      continue;
+    }
+    const globalDocumentRegion = {
+      left: cropRect.left + selection.left,
+      top: cropRect.top + selection.top,
+      right: cropRect.left + selection.right,
+      bottom: cropRect.top + selection.bottom,
+      width: selection.width,
+      height: selection.height,
+    };
+    const sourceRegion = roundRectToPixels(mapDocumentRectToImageRect(
+      globalDocumentRegion,
+      fullDocumentRect,
+      sourceWidth,
+      sourceHeight
+    ));
+    refinedTargets.push({
+      ...target,
+      region: normalizeSemanticSplitRegion(sourceRegion, { width: sourceWidth, height: sourceHeight }) || target.region,
+      coordinateLocked: true,
+      regionSource: "photoshop-select-subject",
+    });
+  }
+  return refinedTargets;
+}
+
+function expandPhotoshopSubjectMatchRegion(region, documentWidth, documentHeight) {
+  const padX = Math.max(28, Math.round(region.width * 0.18));
+  const padY = Math.max(28, Math.round(region.height * 0.18));
+  return normalizeSemanticSplitRegion({
+    left: region.left - padX,
+    top: region.top - padY,
+    right: region.right + padX,
+    bottom: region.bottom + padY,
+  }, { width: documentWidth, height: documentHeight });
+}
+
+function normalizePhotoshopSelectionDescriptor(selection) {
+  if (!selection) return null;
+  const left = toNumber(selection.left);
+  const top = toNumber(selection.top);
+  const right = toNumber(selection.right);
+  const bottom = toNumber(selection.bottom);
+  if (![left, top, right, bottom].every(Number.isFinite) || right <= left || bottom <= top) return null;
+  return { left, top, right, bottom, width: right - left, height: bottom - top };
+}
+
+function isUsablePhotoshopSubjectSelection(selection, cropRect, roughRegion) {
+  if (!isSelectionValid(selection) || !cropRect || !roughRegion) return false;
+  const cropArea = Math.max(1, cropRect.width * cropRect.height);
+  const selectionArea = selection.width * selection.height;
+  if (selectionArea < cropArea * 0.003 || selectionArea > cropArea * 0.94) return false;
+  const globalSelection = {
+    left: cropRect.left + selection.left,
+    top: cropRect.top + selection.top,
+    right: cropRect.left + selection.right,
+    bottom: cropRect.top + selection.bottom,
+  };
+  const overlapWidth = Math.max(0, Math.min(globalSelection.right, roughRegion.right) - Math.max(globalSelection.left, roughRegion.left));
+  const overlapHeight = Math.max(0, Math.min(globalSelection.bottom, roughRegion.bottom) - Math.max(globalSelection.top, roughRegion.top));
+  return overlapWidth * overlapHeight > 0;
+}
+
+async function requestSemanticSplitRedrawRegions(settings, imageB64, docSize, candidates) {
+  const regions = [];
+  for (let start = 0; start < candidates.length; start += MAX_SEMANTIC_SPLIT_REDRAWS_PER_MATCH) {
+    const chunk = candidates.slice(start, start + MAX_SEMANTIC_SPLIT_REDRAWS_PER_MATCH);
+    const chunkRegions = await requestSemanticSplitRedrawRegionChunk(settings, imageB64, docSize, chunk);
+    regions.push(...chunkRegions);
+  }
+  return regions;
+}
+
+async function requestSemanticSplitRedrawRegionChunk(settings, imageB64, docSize, candidates) {
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      elements: {
+        type: "array",
+        maxItems: MAX_SEMANTIC_SPLIT_REDRAWS_PER_MATCH,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            index: { type: "integer" },
+            label: { type: "string" },
+            present: { type: "boolean" },
+            left: { type: "number" },
+            top: { type: "number" },
+            right: { type: "number" },
+            bottom: { type: "number" },
+            confidence: { type: "number" },
+          },
+          required: ["index", "label", "present", "left", "top", "right", "bottom", "confidence"],
+        },
+      },
+    },
+    required: ["elements"],
+  };
+
+  const canvasWidth = Math.max(1, Math.round(docSize?.width || 1));
+  const canvasHeight = Math.max(1, Math.round(docSize?.height || 1));
+  const original = await imageItemToRgba({
+    b64: imageB64,
+    format: inferImageFormatFromValue(imageB64) || "png",
+  }, { width: canvasWidth, height: canvasHeight });
+  const sourceCropByIndex = new Map();
+  const content = [{
+    type: "input_text",
+    text: [
+      "Return JSON only. Each indexed pair contains a zoomed crop from the original Photoshop canvas followed by a tightly cropped isolated redraw candidate.",
+      "For each pair, match everything actually represented by the candidate to the preceding source crop, then return its tight outermost visible bounding box in that source crop's LOCAL pixel coordinates.",
+      "The local source-crop upper-left is always 0,0. Do not return full-canvas coordinates and do not copy coordinates or scale from the candidate image, because the candidate has been tightly cropped and may have a different size.",
+      "If the candidate contains several repeated objects, match that complete represented set and return one union box around those corresponding source objects.",
+      "Include authored shadows, glow, protrusions, and antialiased edges belonging to the matched asset. Exclude neighboring source art absent from the candidate.",
+      "Set present=false and all coordinates to zero only when the candidate cannot be matched to its source crop.",
+    ].join("\n"),
+  }];
+
+  for (const candidate of candidates) {
+    const sourceCropRect = expandSemanticSplitMatchRegion(candidate.target?.region, canvasWidth, canvasHeight);
+    const sourceCrop = cropRgbaToRect(original.rgba, canvasWidth, canvasHeight, sourceCropRect);
+    sourceCropByIndex.set(candidate.index, sourceCropRect);
+    const sourceCropDataUrl = toDataUrl(
+      bytesToBase64(encodePngRgba(sourceCrop.width, sourceCrop.height, sourceCrop.rgba)),
+      "png"
+    );
+    const candidateDataUrl = await semanticSplitImageItemDataUrl(candidate.sourceItem, docSize);
+    if (!candidateDataUrl) continue;
+    content.push({
+      type: "input_text",
+      text: [
+        `Pair index ${candidate.index}; label: ${candidate.target.label}; description: ${candidate.target.target}.`,
+        `Source crop size: ${sourceCrop.width} x ${sourceCrop.height}; report local coordinates within this crop.`,
+        "Next image: zoomed original source crop. Image after that: tightly cropped redraw candidate.",
+      ].join("\n"),
+    });
+    content.push({ type: "input_image", image_url: sourceCropDataUrl, detail: "high" });
+    content.push({ type: "input_image", image_url: candidateDataUrl, detail: "high" });
+  }
+
+  const payload = {
+    model: DEFAULT_SEMANTIC_EDIT_MODEL,
+    input: [{ role: "user", content }],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "semantic_split_redraw_regions",
+        strict: true,
+        schema,
+      },
+    },
+  };
+  const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${settings.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  }, "GPT 白底候选原图坐标复核");
+  if (!response.ok) return [];
+
+  const plan = parseJsonFromResponseOutput(parseResponsesJsonText(await response.text()));
+  return (Array.isArray(plan?.elements) ? plan.elements : [])
+    .map((item) => {
+      const index = Math.round(toNumber(item?.index));
+      const present = Boolean(item?.present);
+      const cropRect = sourceCropByIndex.get(index);
+      const localRegion = present && cropRect
+        ? normalizeSemanticSplitRegion(item, { width: cropRect.width, height: cropRect.height })
+        : null;
+      const region = localRegion && cropRect ? normalizeSemanticSplitRegion({
+        left: cropRect.left + localRegion.left,
+        top: cropRect.top + localRegion.top,
+        right: cropRect.left + localRegion.right,
+        bottom: cropRect.top + localRegion.bottom,
+      }, { width: canvasWidth, height: canvasHeight }) : null;
+      return {
+        index,
+        label: cleanSemanticSplitLabel(item?.label, `元素${index + 1}`),
+        present,
+        region,
+        confidence: Math.max(0, Math.min(1, toNumber(item?.confidence) || 0)),
+      };
+    })
+    .filter((item) => sourceCropByIndex.has(item.index) && (!item.present || item.region));
+}
+
+function expandSemanticSplitMatchRegion(region, canvasWidth, canvasHeight) {
+  const normalized = normalizeSemanticSplitRegion(region, { width: canvasWidth, height: canvasHeight }) || {
+    left: 0,
+    top: 0,
+    right: canvasWidth,
+    bottom: canvasHeight,
+    width: canvasWidth,
+    height: canvasHeight,
+  };
+  const padX = Math.max(48, Math.round(normalized.width * 0.55));
+  const padY = Math.max(48, Math.round(normalized.height * 0.55));
+  return normalizeSemanticSplitRegion({
+    left: normalized.left - padX,
+    top: normalized.top - padY,
+    right: normalized.right + padX,
+    bottom: normalized.bottom + padY,
+  }, { width: canvasWidth, height: canvasHeight });
+}
+
+async function semanticSplitImageItemDataUrl(item, docSize) {
+  const source = await imageItemToCanvasRgba(item, docSize, "拆图候选坐标复核");
+  const whiteRgba = flattenRgbaOnWhite(source.rgba);
+  const { mask } = createSplitForegroundMask(whiteRgba, source.width, source.height);
+  const bounds = getMaskBounds(mask, source.width, source.height);
+  if (!bounds) return "";
+  const crop = cropRgbaToRect(whiteRgba, source.width, source.height, bounds);
+  return toDataUrl(bytesToBase64(encodePngRgba(crop.width, crop.height, crop.rgba)), "png");
 }
 
 function scaleSemanticSplitItemToDocument(item, sourceSize, targetRect) {
@@ -2742,7 +3400,7 @@ function scaleSemanticSplitItemToDocument(item, sourceSize, targetRect) {
   };
 }
 
-async function requestSemanticSplitLayerBatchWithRetry(settings, prompt, imageB64, target, index, total) {
+async function requestSemanticSplitLayerBatchWithRetry(settings, prompt, imageB64, target, index, total, options = {}) {
   const maxAttempts = 1 + SEMANTIC_SPLIT_TRANSIENT_RETRY_DELAYS_MS.length;
   let lastError = null;
 
@@ -2751,8 +3409,22 @@ async function requestSemanticSplitLayerBatchWithRetry(settings, prompt, imageB6
       if (attempt > 1) {
         setStatus(`拆图层 ${index + 1}/${total}「${target.label}」上游断流，正在重试 ${attempt}/${maxAttempts}...`);
       }
-      return await requestEdits(settings, prompt, imageB64, null, { size: "auto" });
+      return await requestEdits(settings, prompt, imageB64, null, {
+        size: "auto",
+        outputFormat: "png",
+        ...(options.transparentPreferred
+          ? { background: "transparent" }
+          : {}),
+      });
     } catch (error) {
+      if (options.transparentPreferred && isUnsupportedTransparentBackgroundError(error)) {
+        const fallbackPrompt = buildSemanticSplitLayerPrompt(target, index, total, null, { transparent: false });
+        console.warn("[split] transparent background unsupported; falling back to white matte", error?.message || error);
+        return await requestEdits(settings, fallbackPrompt, imageB64, null, {
+          size: "auto",
+          outputFormat: "png",
+        });
+      }
       lastError = error;
       if (!isTransientSemanticSplitLayerError(error) || attempt >= maxAttempts) {
         throw error;
@@ -2793,8 +3465,21 @@ function delay(ms) {
   return new Promise((resolve) => setTimer(resolve, Math.max(0, Number(ms) || 0)));
 }
 
-function buildSemanticSplitLayerPrompt(target, index, total, docSize = null) {
+function shouldUseTransparentSemanticSplit(settings) {
+  return isGptImage2Model(settings?.model) && normalizeImageOutputFormat(settings?.format || "png") === "png";
+}
+
+function isUnsupportedTransparentBackgroundError(error) {
+  const status = Number(error?.status || error?.response?.status || 0);
+  const message = String(error?.message || error?.responseText || error || "").toLowerCase();
+  return (status === 400 || status === 422) &&
+    /background|transparent|output_format/.test(message) &&
+    /unsupported|invalid|unknown|unrecognized|not allowed|not supported|must be/.test(message);
+}
+
+function buildSemanticSplitLayerPrompt(target, index, total, docSize = null, options = {}) {
   const isBaseLayer = isSemanticBaseLayer(target);
+  const transparent = Boolean(options.transparent);
   const width = Math.max(1, Math.round(docSize?.width || 0));
   const height = Math.max(1, Math.round(docSize?.height || 0));
   return [
@@ -2807,19 +3492,25 @@ function buildSemanticSplitLayerPrompt(target, index, total, docSize = null) {
     width && height
       ? `Return a full-canvas PNG exactly ${width}x${height} pixels, matching the input canvas size.`
       : "Return a full-canvas PNG with the exact same pixel size as the input image.",
-    "Keep the extracted target at the original Photoshop canvas coordinates, with a pure #FFFFFF white matte everywhere else.",
-    "Do not make the background transparent yourself; return the target on clean white so the next Koukoutu background-removal step can create the alpha matte.",
+    transparent
+      ? "Keep the extracted target at the original Photoshop canvas coordinates, with a fully transparent alpha background everywhere else."
+      : "Keep the extracted target at the original Photoshop canvas coordinates, with a pure opaque #FFFFFF white matte everywhere else.",
+    transparent
+      ? "The transparent PNG is the final split output. Preserve useful semi-transparent anti-aliased edges and do not add a white, black, checkerboard, or colored matte."
+      : "The white-matte PNG is the final split output. Do not make any pixel transparent and do not crop away the white canvas.",
     "Keep the extracted target at its original position, original scale, original shape, original colors, and original style.",
     "Preserve anti-aliased edges, transparency-like softness, texture, tiny markings, highlights, and shadows that belong to this exact target.",
     isBaseLayer
       ? "This is a base/background/frame layer: remove foreground icons, text, buttons, badges, and labels from this layer, then reconstruct the hidden surface/texture underneath so the panel is continuous and has no holes."
       : "",
-    "Everything that is not this target must be plain white matte.",
+    transparent
+      ? "Everything that is not this target must be fully transparent."
+      : "Everything that is not this target must be plain white matte.",
     "Do not include neighboring touching elements, separate accessories, other body parts, text, labels, UI pieces, or background/base pixels unless they are explicitly part of this target.",
     "Do not crop, trim empty matte pixels, recenter, enlarge, move, relabel, add guides, add boxes, add text, or create a contact sheet.",
     isBaseLayer
-      ? "Only redraw/inpaint the covered base surface where foreground elements were removed; do not invent new decorations."
-      : "Do not redraw the target; preserve it exactly from the source image.",
+      ? "Faithfully redraw/inpaint only the covered base surface where foreground elements were removed; do not invent new decorations."
+      : "Faithfully isolate or redraw only what is necessary to remove occluders and neighboring pixels. Preserve the exact target design, silhouette, component count, internal occupancy, and authored shadows.",
     "If this target is not present in the image, return a blank plain white canvas.",
   ].filter(Boolean).join("\n");
 }
@@ -2875,9 +3566,9 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
       if (!isResponsesEditEndpointUnsupported(error)) {
         throw error;
       }
-      if (options.screenshotReferenceEdit) {
-        console.warn("[image-edit] Responses screenshot edit unavailable; refusing unsafe /images/edits fallback", error?.message || error);
-        const safeError = new Error(`ChatGPT 风格截图重绘不可用，已停止以避免退回旧的 Mask/兼容编辑路径：${error.message || error}`);
+      if (options.screenshotReferenceEdit || options.manualReferenceEdit) {
+        console.warn("[image-edit] Responses normal-upload edit unavailable; refusing unsafe /images/edits fallback", error?.message || error);
+        const safeError = new Error(`ChatGPT 风格普通上传图片编辑不可用，已停止以避免退回旧的 Mask/兼容编辑路径：${error.message || error}`);
         safeError.cause = error;
         throw safeError;
       }
@@ -2903,7 +3594,11 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
     form.append("size", requestSize);
   }
   form.append("quality", settings.quality);
-  form.append("output_format", settings.format);
+  form.append("output_format", normalizeImageOutputFormat(options.outputFormat || settings.format));
+  const requestedBackground = normalizeImageBackground(options.background || settings.background);
+  if (requestedBackground) {
+    form.append("background", requestedBackground);
+  }
   const inputFidelity = getImageEditInputFidelity(settings.model, true);
   if (inputFidelity) {
     form.append("input_fidelity", inputFidelity);
@@ -2929,7 +3624,8 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
     model: settings.model,
     size: requestSize || null,
     quality: settings.quality,
-    outputFormat: settings.format,
+    outputFormat: normalizeImageOutputFormat(options.outputFormat || settings.format),
+    outputBackground: requestedBackground || null,
     inputFidelity: inputFidelity || null,
     inputFidelityMode: getImageEditInputFidelityDebugMode(settings.model, inputFidelity),
     imageFileName: `input.${fileExtensionForFormat(imageFormat)}`,
@@ -2982,7 +3678,7 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
 
 function shouldUseChatGptStyleResponsesEdit(settings, hasMask = false, options = {}) {
   if (!settings?.apiKey || !settings?.baseUrl) return false;
-  if (options.screenshotReferenceEdit) return true;
+  if (options.screenshotReferenceEdit || options.manualReferenceEdit) return true;
   if (state.unsupportedResponsesEditEndpoints?.has?.(getResponsesEditEndpointKey(settings))) return false;
   // Codex sidecar now exposes OpenAI-compatible /images/edits and internally
   // forwards multipart mask edits through the Responses image toolchain. Prefer
@@ -3086,7 +3782,8 @@ async function requestResponsesImageEditFallback(settings, prompt, imageB64, mas
     image_url: toDataUrl(imageB64, imageFormat),
     detail: "high",
   };
-  const inputContent = options.screenshotReferenceEdit
+  const useImageFirstInput = Boolean(options.screenshotReferenceEdit || options.manualReferenceEdit);
+  const inputContent = useImageFirstInput
     ? [imageInputPart, textInputPart]
     : [textInputPart, imageInputPart];
   const buildPayload = (mainModel) => ({
@@ -3103,7 +3800,10 @@ async function requestResponsesImageEditFallback(settings, prompt, imageB64, mas
         ...(getResponsesImageToolModel(settings.model) ? { model: getResponsesImageToolModel(settings.model) } : {}),
         size: options.size || settings.size || "auto",
         quality: normalizeResponsesImageQuality(settings.quality),
-        output_format: normalizeImageOutputFormat(settings.format),
+        output_format: normalizeImageOutputFormat(options.outputFormat || settings.format),
+        ...(normalizeImageBackground(options.background || settings.background)
+          ? { background: normalizeImageBackground(options.background || settings.background) }
+          : {}),
         action: "edit",
         ...(maskB64 ? { input_image_mask: { image_url: toDataUrl(maskB64, maskFormat) } } : {}),
         ...(getImageEditInputFidelity(settings.model, true)
@@ -3115,16 +3815,17 @@ async function requestResponsesImageEditFallback(settings, prompt, imageB64, mas
   });
   const initialPayload = buildPayload(DEFAULT_SEMANTIC_EDIT_MODEL);
 
-  if (options.screenshotReferenceEdit && initialPayload.tools?.some?.((tool) => tool?.input_image_mask)) {
-    throw new Error("选区截图重绘请求意外包含 API Mask，已停止发送以避免走错旧重绘路径");
+  if ((options.screenshotReferenceEdit || options.manualReferenceEdit) && initialPayload.tools?.some?.((tool) => tool?.input_image_mask)) {
+    throw new Error("普通上传参考图请求意外包含 API Mask，已停止发送以避免走错旧重绘路径");
   }
 
   await saveDebugJsonFile("openai-last-responses-edit-request.json", {
     pluginVersion: PLUGIN_VERSION,
     endpointPath: "/responses",
-    route: maskB64 ? "mask-edit" : (options.screenshotReferenceEdit ? "screenshot-reference-edit" : "reference-edit"),
+    route: maskB64 ? "mask-edit" : (options.screenshotReferenceEdit ? "screenshot-reference-edit" : (options.manualReferenceEdit ? "manual-reference-edit" : "reference-edit")),
     hasMask: Boolean(maskB64),
     screenshotReferenceEdit: Boolean(options.screenshotReferenceEdit),
+    manualReferenceEdit: Boolean(options.manualReferenceEdit),
     imageBytes,
     maskBytes,
     imageFormat,
@@ -3136,13 +3837,14 @@ async function requestResponsesImageEditFallback(settings, prompt, imageB64, mas
     imageToolSize: initialPayload.tools?.[0]?.size || null,
     imageToolQuality: initialPayload.tools?.[0]?.quality || null,
     imageToolOutputFormat: initialPayload.tools?.[0]?.output_format || null,
+    imageToolBackground: initialPayload.tools?.[0]?.background || null,
     imageToolInputFidelity: initialPayload.tools?.[0]?.input_fidelity || null,
     imageToolInputFidelityMode: getImageEditInputFidelityDebugMode(settings.model, initialPayload.tools?.[0]?.input_fidelity || ""),
     payloadHasInputImageMask: Boolean(initialPayload.tools?.some?.((tool) => tool?.input_image_mask)),
     referenceSize: options.referenceSize || null,
     referenceCanvasSize: options.referenceCanvasSize || null,
     referenceCropBox: options.referenceCropBox || null,
-    inputContentOrder: options.screenshotReferenceEdit ? "image-first" : "text-first",
+    inputContentOrder: useImageFirstInput ? "image-first" : "text-first",
     prompt: promptText,
   });
 
@@ -3150,6 +3852,8 @@ async function requestResponsesImageEditFallback(settings, prompt, imageB64, mas
     ? `正在用 Responses 图像工具重绘：图像 ${formatBytes(imageBytes)}，Mask ${formatBytes(maskBytes)}`
     : options.screenshotReferenceEdit
       ? `正在用 Responses 图像工具按普通上传截图编辑：图像 ${formatBytes(imageBytes)}，无 API Mask`
+      : options.manualReferenceEdit
+      ? `正在用 Responses 图像工具按普通上传参考图编辑：图像 ${formatBytes(imageBytes)}，无 API Mask`
       : `正在用 Responses 图像工具编辑参考图：图像 ${formatBytes(imageBytes)}，无 API Mask`;
   setStatus(uploadStatus);
   const { json } = await sendResponsesJsonWithMainModelFallback(settings, buildPayload, {
@@ -3270,6 +3974,21 @@ function buildResponsesImageEditPrompt(prompt, hasMask, options = {}) {
   const referenceSize = options.referenceSize ? `Selected Photoshop crop size: ${options.referenceSize}.` : "";
   const referenceCanvasSize = options.referenceCanvasSize ? `Uploaded white reference canvas size: ${options.referenceCanvasSize}.` : "";
   const referenceCropBox = options.referenceCropBox ? `Selected crop box inside uploaded canvas: ${options.referenceCropBox}.` : "";
+  if (!hasMask && options.manualReferenceEdit) {
+    return [
+      String(prompt || "").trim(),
+      "",
+      "按普通上传参考图编辑，不按蒙版理解；这张图片是用户手动选择的参考图/源图。",
+      "Edit the provided reference image like a normal uploaded image in ChatGPT. It is NOT a mask; it is the user-selected source/reference image.",
+      options.referenceSize ? `Uploaded reference image size: ${options.referenceSize}.` : "",
+      "用户文字是唯一编辑规格：只处理用户明确要求改变、生成、替换或风格化的内容。",
+      "The user's text is the only edit specification: apply only the requested change, generation, replacement, or stylization.",
+      "Use the uploaded image as the primary visual reference. Preserve its recognizable subject identity, composition, pose, proportions, material, lighting, and style unless the user explicitly asks to change them.",
+      "不要把参考图当成 Photoshop 选区补丁；不要强行原位回贴；不要添加无关文字、水印、边框或说明标签。",
+      "Return one clean PNG image based on the uploaded reference.",
+      size,
+    ].filter(Boolean).join("\n");
+  }
   if (!hasMask && options.screenshotReferenceEdit) {
     return [
       String(prompt || "").trim(),
@@ -3464,6 +4183,12 @@ function normalizeImageOutputFormat(format) {
   if (value === "jpg") return "jpeg";
   if (["png", "jpeg", "webp"].includes(value)) return value;
   return "png";
+}
+
+function normalizeImageBackground(background) {
+  const value = String(background || "").toLowerCase().trim();
+  if (["auto", "opaque", "transparent"].includes(value)) return value;
+  return "";
 }
 
 async function requestKoukoutuCutout(settings, imageB64) {
@@ -5141,6 +5866,10 @@ function formatOpenAIResponseError(response, detail, context = {}) {
   const path = context.endpointPath || "";
   const kind = context.kind || "图片请求";
 
+  if (response.status === 403 && /image generation is not enabled for this group/i.test(message)) {
+    return "HTTP " + response.status + ": " + message + "。当前 Sub2API API Key 所属分组未开启图片生成权限，请在 Sub2API 管理后台编辑该分组并打开“允许图片生成”后重试。";
+  }
+
   if (response.status === 404 && /\/images\/edits$/i.test(path)) {
     return `${base}。${kind}需要图片编辑接口 ${path}；选区重绘会走 /responses 普通上传截图，不依赖 /images/edits mask 上传。请把 Base URL 指向支持该编辑接口的服务，或在设置里改成该服务真实的编辑路径。`;
   }
@@ -5501,22 +6230,20 @@ async function splitGeneratedImageIntoElementItems(sourceItem, docSize) {
   });
 }
 
-async function normalizeSemanticSplitLayerItem(sourceItem, docSize, label, splitIndex, settings = null) {
+async function normalizeSemanticSplitLayerItem(sourceItem, docSize, label, splitIndex, settings = null, target = null) {
   if (!sourceItem) return null;
-  if (settings?.koukoutuApiKey) {
-    return normalizeSemanticSplitLayerItemWithKoukoutu(settings, sourceItem, docSize, label, splitIndex);
-  }
-
   let source;
   try {
     source = await imageItemToCanvasRgba(sourceItem, docSize, label);
   } catch (error) {
     if (error?.unsafeCanvasSize) throw error;
-    console.warn(`[split] image decode failed for ${label}; refusing unsafe full-canvas placement`, error);
-    throw new Error(`拆图结果「${label || splitIndex || ""}」无法解码，已停止导入以避免把未透明化的整张结果放回 Photoshop：${error.message || error}`);
+    console.warn(`[split] redraw decode failed for ${label}`, error);
+    throw new Error(`拆图结果「${label || splitIndex || ""}」无法解码：${error.message || error}`);
   }
   const { width, height, rgba } = source;
-  const { mask, workingRgba } = createSplitForegroundMask(rgba, width, height);
+  const transparentOutput = hasUsefulSplitAlpha(rgba, width, height);
+  const workingRgba = transparentOutput ? new Uint8Array(rgba) : flattenRgbaOnWhite(rgba);
+  const { mask } = createSplitForegroundMask(workingRgba, width, height);
   const bounds = getMaskBounds(mask, width, height);
   if (!bounds) return null;
 
@@ -5531,74 +6258,11 @@ async function normalizeSemanticSplitLayerItem(sourceItem, docSize, label, split
     width: docSize?.width || width,
     height: docSize?.height || height,
   };
-  const layerRgba = new Uint8Array(width * height * 4);
-
-  for (let index = 0; index < mask.length; index += 1) {
-    if (!mask[index]) continue;
-    const offset = index * 4;
-    layerRgba[offset] = workingRgba[offset];
-    layerRgba[offset + 1] = workingRgba[offset + 1];
-    layerRgba[offset + 2] = workingRgba[offset + 2];
-    layerRgba[offset + 3] = workingRgba[offset + 3] || 255;
-  }
-
-  return {
-    b64: bytesToBase64(encodePngRgba(width, height, layerRgba)),
-    format: "png",
-    splitIndex,
-    splitLabel: label,
-    splitBounds: {
-      left: bounds.left,
-      top: bounds.top,
-      right: bounds.right,
-      bottom: bounds.bottom,
-      width: bounds.width,
-      height: bounds.height,
-    },
-    importVisibleRect: {
-      left: bounds.left,
-      top: bounds.top,
-      right: bounds.right,
-      bottom: bounds.bottom,
-      width: bounds.width,
-      height: bounds.height,
-    },
-    targetRect: fullRect,
-    placementRect: fullRect,
-  };
-}
-
-async function normalizeSemanticSplitLayerItemWithKoukoutu(settings, sourceItem, docSize, label, splitIndex) {
-  const whiteCanvasB64 = await createSemanticSplitWhiteCanvasBase64(sourceItem, docSize, label);
-  setStatus(`正在用抠抠图透明化拆图层 ${splitIndex}：${label}...`);
-  const cutoutItem = await requestKoukoutuCutout(settings, whiteCanvasB64);
-  let source;
-  try {
-    source = await imageItemToCanvasRgba(cutoutItem, docSize, label);
-  } catch (error) {
-    if (error?.unsafeCanvasSize) throw error;
-    console.warn(`[split] Koukoutu result decode failed for ${label}`, error);
-    throw new Error(`抠抠图拆图结果「${label || splitIndex || ""}」无法解码：${error.message || error}`);
-  }
-
-  const { width, height, rgba } = source;
-  const bounds = getAlphaBounds(rgba, width, height, SPLIT_ALPHA_THRESHOLD);
-  if (!bounds) return null;
-  if (looksLikeUncutWhiteMatte(rgba, width, height, bounds)) {
-    throw new Error(`抠抠图没有移除拆图层「${label || splitIndex || ""}」的白底，已跳过以避免把白底整层放回 Photoshop`);
-  }
-  const minArea = Math.max(80, Math.floor(width * height * 0.00008));
-  if (bounds.width * bounds.height < minArea) return null;
-
-  const fullRect = {
-    left: 0,
-    top: 0,
-    right: docSize?.width || width,
-    bottom: docSize?.height || height,
-    width: docSize?.width || width,
-    height: docSize?.height || height,
-  };
-  const normalizedB64 = bytesToBase64(encodePngRgba(width, height, rgba));
+  const lockedRegion = normalizeSemanticSplitRegion(target?.region, { width, height });
+  const locked = lockedRegion
+    ? lockWhiteRedrawToSemanticRegion(workingRgba, width, height, bounds, lockedRegion, transparentOutput)
+    : { rgba: workingRgba, bounds };
+  const normalizedB64 = bytesToBase64(encodePngRgba(width, height, locked.rgba));
 
   return {
     b64: normalizedB64,
@@ -5607,68 +6271,106 @@ async function normalizeSemanticSplitLayerItemWithKoukoutu(settings, sourceItem,
     splitIndex,
     splitLabel: label,
     splitBounds: {
-      left: bounds.left,
-      top: bounds.top,
-      right: bounds.right,
-      bottom: bounds.bottom,
-      width: bounds.width,
-      height: bounds.height,
+      left: locked.bounds.left,
+      top: locked.bounds.top,
+      right: locked.bounds.right,
+      bottom: locked.bounds.bottom,
+      width: locked.bounds.width,
+      height: locked.bounds.height,
     },
     importVisibleRect: {
-      left: bounds.left,
-      top: bounds.top,
-      right: bounds.right,
-      bottom: bounds.bottom,
-      width: bounds.width,
-      height: bounds.height,
+      left: locked.bounds.left,
+      top: locked.bounds.top,
+      right: locked.bounds.right,
+      bottom: locked.bounds.bottom,
+      width: locked.bounds.width,
+      height: locked.bounds.height,
     },
     targetRect: fullRect,
     placementRect: fullRect,
-    koukoutuMatte: true,
+    whiteMatteLayer: !transparentOutput,
+    transparentLayer: transparentOutput,
+    coordinateLocked: Boolean(lockedRegion),
     skipPreviewCrop: false,
   };
 }
 
-async function createSemanticSplitWhiteCanvasBase64(sourceItem, docSize, label) {
-  let source;
-  try {
-    source = await imageItemToCanvasRgba(sourceItem, docSize, label);
-  } catch (error) {
-    if (error?.unsafeCanvasSize) throw error;
-    console.warn(`[split] image decode failed for ${label}; refusing unsafe full-canvas placement`, error);
-    throw new Error(`拆图结果「${label || ""}」无法解码，已停止导入以避免把未透明化的整张结果放回 Photoshop：${error.message || error}`);
-  }
-  return bytesToBase64(encodePngRgba(source.width, source.height, source.rgba));
+function lockWhiteRedrawToSemanticRegion(sourceRgba, canvasWidth, canvasHeight, sourceBounds, targetRegion, preserveAlpha = false) {
+  const sourceCrop = cropRgbaToRect(sourceRgba, canvasWidth, canvasHeight, sourceBounds);
+  const targetWidth = Math.max(1, targetRegion.width);
+  const targetHeight = Math.max(1, targetRegion.height);
+  const resized = resizeRgbaBilinear(sourceCrop.rgba, sourceCrop.width, sourceCrop.height, targetWidth, targetHeight);
+  const output = preserveAlpha
+    ? new Uint8Array(canvasWidth * canvasHeight * 4)
+    : createOpaqueWhiteRgba(canvasWidth, canvasHeight);
+  blitRgba(resized, targetWidth, targetHeight, output, canvasWidth, canvasHeight, targetRegion.left, targetRegion.top);
+  return { rgba: output, bounds: targetRegion };
 }
 
-function looksLikeUncutWhiteMatte(rgba, width, height, bounds) {
-  if (!bounds) return false;
-  const coversCanvas = bounds.width >= width * 0.96 && bounds.height >= height * 0.96;
-  if (!coversCanvas) return false;
-  const sample = Math.max(3, Math.min(16, Math.floor(Math.min(width, height) / 20)));
-  let whiteOpaque = 0;
-  let count = 0;
-  const samplePixel = (x, y) => {
-    const offset = (y * width + x) * 4;
-    count += 1;
-    if (
-      rgba[offset + 3] > 245 &&
-      rgba[offset] > 245 &&
-      rgba[offset + 1] > 245 &&
-      rgba[offset + 2] > 245
-    ) {
-      whiteOpaque += 1;
-    }
-  };
-  for (let y = 0; y < sample; y += 1) {
-    for (let x = 0; x < sample; x += 1) {
-      samplePixel(x, y);
-      samplePixel(width - 1 - x, y);
-      samplePixel(x, height - 1 - y);
-      samplePixel(width - 1 - x, height - 1 - y);
+function cropRgbaToRect(sourceRgba, sourceWidth, sourceHeight, rect) {
+  const left = Math.max(0, Math.min(sourceWidth - 1, Math.round(rect?.left || 0)));
+  const top = Math.max(0, Math.min(sourceHeight - 1, Math.round(rect?.top || 0)));
+  const right = Math.max(left + 1, Math.min(sourceWidth, Math.round(rect?.right || sourceWidth)));
+  const bottom = Math.max(top + 1, Math.min(sourceHeight, Math.round(rect?.bottom || sourceHeight)));
+  const width = right - left;
+  const height = bottom - top;
+  const output = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    const sourceStart = ((top + y) * sourceWidth + left) * 4;
+    output.set(sourceRgba.subarray(sourceStart, sourceStart + width * 4), y * width * 4);
+  }
+  return { rgba: output, width, height };
+}
+
+function createOpaqueWhiteRgba(width, height) {
+  const output = new Uint8Array(width * height * 4);
+  output.fill(255);
+  return output;
+}
+
+function resizeRgbaBilinear(sourceRgba, sourceWidth, sourceHeight, targetWidth, targetHeight) {
+  if (sourceWidth === targetWidth && sourceHeight === targetHeight) {
+    return new Uint8Array(sourceRgba);
+  }
+
+  const output = new Uint8Array(targetWidth * targetHeight * 4);
+  const xScale = targetWidth > 1 ? (sourceWidth - 1) / (targetWidth - 1) : 0;
+  const yScale = targetHeight > 1 ? (sourceHeight - 1) / (targetHeight - 1) : 0;
+  for (let y = 0; y < targetHeight; y += 1) {
+    const sourceY = y * yScale;
+    const y0 = Math.floor(sourceY);
+    const y1 = Math.min(sourceHeight - 1, y0 + 1);
+    const fy = sourceY - y0;
+    for (let x = 0; x < targetWidth; x += 1) {
+      const sourceX = x * xScale;
+      const x0 = Math.floor(sourceX);
+      const x1 = Math.min(sourceWidth - 1, x0 + 1);
+      const fx = sourceX - x0;
+      const outputOffset = (y * targetWidth + x) * 4;
+      const topLeft = (y0 * sourceWidth + x0) * 4;
+      const topRight = (y0 * sourceWidth + x1) * 4;
+      const bottomLeft = (y1 * sourceWidth + x0) * 4;
+      const bottomRight = (y1 * sourceWidth + x1) * 4;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const topValue = sourceRgba[topLeft + channel] + ((sourceRgba[topRight + channel] - sourceRgba[topLeft + channel]) * fx);
+        const bottomValue = sourceRgba[bottomLeft + channel] + ((sourceRgba[bottomRight + channel] - sourceRgba[bottomLeft + channel]) * fx);
+        output[outputOffset + channel] = Math.round(topValue + ((bottomValue - topValue) * fy));
+      }
     }
   }
-  return count > 0 && whiteOpaque / count > 0.85;
+  return output;
+}
+
+function flattenRgbaOnWhite(sourceRgba) {
+  const output = new Uint8Array(sourceRgba.length);
+  for (let index = 0; index < sourceRgba.length; index += 4) {
+    const alpha = sourceRgba[index + 3] / 255;
+    output[index] = Math.round((sourceRgba[index] * alpha) + (255 * (1 - alpha)));
+    output[index + 1] = Math.round((sourceRgba[index + 1] * alpha) + (255 * (1 - alpha)));
+    output[index + 2] = Math.round((sourceRgba[index + 2] * alpha) + (255 * (1 - alpha)));
+    output[index + 3] = 255;
+  }
+  return output;
 }
 
 async function imageItemToRgba(item, targetSize = null) {
@@ -5761,21 +6463,23 @@ async function createWhiteMatteTransparentBase64(item) {
   return bytesToBase64(encodePngRgba(width, height, workingRgba));
 }
 
+function hasUsefulSplitAlpha(sourceRgba, width, height) {
+  const total = Math.max(1, width * height);
+  let visible = 0;
+  let transparent = 0;
+  for (let index = 0; index < total; index += 1) {
+    const alpha = sourceRgba[index * 4 + 3];
+    if (alpha > SPLIT_ALPHA_THRESHOLD) visible += 1;
+    if (alpha < 240) transparent += 1;
+  }
+  return visible > 0 && visible < total * 0.98 && transparent > total * 0.02;
+}
+
 function createSplitForegroundMask(sourceRgba, width, height) {
   const total = width * height;
   const workingRgba = new Uint8Array(sourceRgba);
   const mask = new Uint8Array(total);
-  let visible = 0;
-  let transparent = 0;
-
-  for (let index = 0; index < total; index += 1) {
-    const alpha = workingRgba[index * 4 + 3];
-    if (alpha > SPLIT_ALPHA_THRESHOLD) visible += 1;
-    if (alpha < 240) transparent += 1;
-  }
-
-  const hasUsefulAlpha = visible > 0 && visible < total * 0.98 && transparent > total * 0.02;
-  if (hasUsefulAlpha) {
+  if (hasUsefulSplitAlpha(workingRgba, width, height)) {
     for (let index = 0; index < total; index += 1) {
       mask[index] = workingRgba[index * 4 + 3] > SPLIT_ALPHA_THRESHOLD ? 1 : 0;
     }
@@ -8095,6 +8799,22 @@ async function createReferenceRegionInputs(selection, docSize, model) {
   };
 }
 
+async function createManualReferenceInputs(settings) {
+  const reference = state.manualReferenceImage;
+  if (!reference?.b64) {
+    throw new Error("请先选择一张参考图");
+  }
+  const format = reference.format || inferImageFormatFromValue(reference.b64) || "png";
+  await saveDebugBase64Image(`openai-last-manual-reference.${fileExtensionForFormat(format)}`, reference.b64);
+  return {
+    image: reference.b64,
+    apiSize: settings.size || "auto",
+    displaySize: `${Math.max(1, Math.round(reference.width || 1))}x${Math.max(1, Math.round(reference.height || 1))}`,
+    name: reference.name || "参考图",
+    format,
+  };
+}
+
 function getInpaintOutputSize(placementRect, apiSize, model) {
   if (!isComfyModel(model)) {
     return null;
@@ -8902,7 +9622,10 @@ async function saveHistoryItem(item) {
       splitIndex: item.splitIndex || null,
       splitLabel: item.splitLabel || null,
       splitBounds: item.splitBounds || null,
+      coordinateLocked: Boolean(item.coordinateLocked),
       whiteMatteMask: Boolean(item.whiteMatteMask),
+      whiteMatteLayer: Boolean(item.whiteMatteLayer),
+      transparentLayer: Boolean(item.transparentLayer),
       preclippedImport: Boolean(item.preclippedImport),
       previewB64: item.previewB64 || null,
       previewBounds: item.previewBounds || null,
@@ -8938,6 +9661,8 @@ async function loadHistory() {
           skipPreviewCrop: Boolean(record.skipPreviewCrop),
           importVisibleRect: record.importVisibleRect || null,
           normalizedPlacementSize: Boolean(record.normalizedPlacementSize),
+          whiteMatteLayer: Boolean(record.whiteMatteLayer),
+          transparentLayer: Boolean(record.transparentLayer),
           preclippedImport: Boolean(record.preclippedImport),
           previewB64: record.previewB64 || null,
           previewBounds: record.previewBounds || null,
@@ -9109,6 +9834,89 @@ function setStatus(message) {
   if (settingsDot) {
     settingsDot.className = $("statusDot").className;
   }
+  updateErrorAlert(message);
+}
+
+function dismissErrorAlert() {
+  const alert = $("errorAlert");
+  if (!alert) return;
+  alert.classList.add("hidden");
+}
+
+function updateErrorAlert(message) {
+  const alert = $("errorAlert");
+  const title = $("errorAlertTitle");
+  const detail = $("errorAlertMessage");
+  const hint = $("errorAlertHint");
+  if (!alert || !title || !detail || !hint) return;
+
+  const raw = String(message || "").trim();
+  if (!isErrorStatus(raw)) {
+    alert.classList.add("hidden");
+    return;
+  }
+
+  const formatted = formatErrorAlert(raw);
+  title.textContent = formatted.title;
+  detail.textContent = formatted.message;
+  hint.textContent = formatted.hint;
+  alert.classList.remove("hidden");
+}
+
+function isErrorStatus(message) {
+  return /失败|错误|异常|不可用|无效|HTTP\s*\d{3}|network request failed|failed to fetch/i.test(String(message || ""));
+}
+
+function formatErrorAlert(message) {
+  const raw = String(message || "").replace(/^\d{1,3}%\s+/, "").trim();
+  const detail = raw.replace(/^失败[：:]\s*/, "").trim();
+
+  if (/image generation is not enabled for this group/i.test(detail)) {
+    return {
+      title: "生成失败：Sub2API 分组没有生图权限",
+      message: detail,
+      hint: "请到 Sub2API 管理后台编辑 API Key 所属分组，开启“允许图片生成”后再试。",
+    };
+  }
+
+  if (/invalid[_ -]?api[_ -]?key|incorrect api key|api key provided is invalid/i.test(detail)) {
+    return {
+      title: "生成失败：API Key 无效",
+      message: detail,
+      hint: "请打开服务设置，确认 Base URL 和 API Key 属于同一个服务，再测试连接。",
+    };
+  }
+
+  if (/network request failed|failed to fetch|network error/i.test(detail)) {
+    return {
+      title: "生成失败：无法连接图片服务",
+      message: detail,
+      hint: "请检查 Base URL、局域网连接和 Sub2API 是否正在运行。",
+    };
+  }
+
+  if (/HTTP\s*404/i.test(detail) && /images\/generations/i.test(detail)) {
+    return {
+      title: "生成失败：找不到文生图接口",
+      message: detail,
+      hint: "请检查 Base URL 和 Image Gen Path，确认服务实际提供 /images/generations 或 /responses。",
+    };
+  }
+
+  if (/HTTP\s*404/i.test(detail) && /images\/edits/i.test(detail)) {
+    return {
+      title: "生成失败：找不到图片编辑接口",
+      message: detail,
+      hint: "请检查 Base URL 和 Edit Path，或确认当前模式应使用 Responses 图片工具。",
+    };
+  }
+
+  const status = detail.match(/HTTP\s*(\d{3})/i);
+  return {
+    title: status ? "生成失败：HTTP " + status[1] : "生成失败",
+    message: detail,
+    hint: "请检查服务设置和接口返回内容，修正后重新生成。",
+  };
 }
 
 function formatStatusMessage(message) {

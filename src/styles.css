@@ -917,6 +917,11 @@ textarea:focus {
   gap: 10px;
 }
 
+.reference-inline-panel {
+  display: block;
+  margin: 0 0 10px;
+}
+
 .source-drop-zone {
   min-height: 80px;
   display: flex;
@@ -957,6 +962,50 @@ textarea:focus {
 .reference-source-button:hover {
   border-color: var(--primary);
   background: rgba(106, 141, 255, 0.06);
+}
+
+.manual-reference-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 72px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-low);
+}
+
+.manual-reference-card img {
+  flex: 0 0 72px;
+  width: 72px;
+  height: 56px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-panel);
+  object-fit: contain;
+}
+
+.manual-reference-info {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.manual-reference-info strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manual-reference-info span {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 15px;
 }
 
 .source-icon {
@@ -2297,8 +2346,20 @@ button:disabled {
 /* UXP hardening: keep non-actionable helper cards out of the way and make the
    settings page use simple document flow. */
 #modeContextPanel,
-#referenceContext,
 #selectionContext {
+  display: none !important;
+}
+
+#referenceContext.reference-inline-panel {
+  display: block !important;
+}
+
+#referenceContext.reference-inline-panel.hidden,
+.parameter-section #fitSelectionRow.hidden,
+#promptPresetBtn.hidden,
+#useSelectionSizeBtn.hidden,
+#negativePromptLabel.hidden,
+#negativePromptInput.hidden {
   display: none !important;
 }
 
@@ -2579,6 +2640,97 @@ button:disabled {
 
 .run-panel .cancel-button.hidden {
   display: none !important;
+}
+
+.run-panel .error-alert {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-height: 230px !important;
+  margin: 8px 0 0 !important;
+  padding: 10px 10px 11px !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  border: 2px solid rgba(251, 113, 133, 0.8) !important;
+  border-left-width: 5px !important;
+  border-radius: var(--radius-sm) !important;
+  background: #3a171f !important;
+  color: #ffe4e6 !important;
+  box-shadow: 0 0 0 1px rgba(251, 113, 133, 0.12), 0 4px 12px rgba(0, 0, 0, 0.28) !important;
+}
+
+.run-panel .error-alert.hidden {
+  display: none !important;
+}
+
+.error-alert-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.error-alert-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+  color: #fff1f2;
+  font-size: 14px;
+  line-height: 18px;
+}
+
+.error-alert-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 21px;
+  width: 21px;
+  height: 21px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  color: #fb7185;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 17px;
+}
+
+.error-alert-dismiss {
+  width: 26px !important;
+  min-width: 26px !important;
+  height: 26px !important;
+  color: #fecdd3 !important;
+}
+
+.error-alert-dismiss:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+  color: #fff1f2 !important;
+}
+
+.error-alert-message,
+.error-alert-hint {
+  width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.error-alert-message {
+  margin-top: 7px;
+  color: #ffe4e6;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 19px;
+}
+
+.error-alert-hint {
+  margin-top: 6px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 228, 230, 0.2);
+  color: #fecdd3;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .run-panel .secondary-actions {
