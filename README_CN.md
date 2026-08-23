@@ -1,6 +1,6 @@
 # OpenAI Photoshop Generator
 
-当前版本：**v0.1.309**
+当前版本：**v0.1.310**
 
 这是一个从零写的轻量版 Photoshop UXP 插件，目标是在 Photoshop 里直接完成 OpenAI 图像生成、局部重绘、扩图、拆图，以及通过抠抠图 API 做透明 PNG 抠图。
 

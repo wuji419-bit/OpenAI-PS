@@ -1,6 +1,6 @@
 # OpenAI Photoshop Generator
 
-Current version: **v0.1.309**
+Current version: **v0.1.310**
 
 ![OpenAI Photoshop Generator running inside Adobe Photoshop](stitch-reference/photoshop-panel-v0163.png)
 

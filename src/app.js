@@ -8,7 +8,7 @@ const imaging = photoshop.imaging;
 const constants = photoshop.constants || {};
 const fs = storage.localFileSystem;
 const PLUGIN_ID = "com.local.openai.photoshop.generator";
-const PLUGIN_VERSION = "0.1.309";
+const PLUGIN_VERSION = "0.1.310";
 
 entrypoints.setup({
   panels: {
@@ -39,6 +39,8 @@ const COMFY_INPAINT_MAX_EDGE = 1600;
 const OPENAI_INPAINT_FULL_CANVAS_MAX_PIXELS = 3840 * 2160;
 const PROTECTED_REPAINT_MIN_SOURCE_NON_WHITE_RATIO = 0.03;
 const PROTECTED_REPAINT_MIN_RESULT_NON_WHITE_RATIO = 0.002;
+const MIN_SCREENSHOT_REFERENCE_EDGE = 256;
+const MAX_SCREENSHOT_REFERENCE_EDGE = 2048;
 const TEMP_SELECTION_CHANNEL_PREFIX = "__openai_inpaint_selection_";
 const MAX_BATCH_COUNT = 10;
 const MAX_SPLIT_LAYERS = 40;
@@ -1176,7 +1178,10 @@ async function runGeneration() {
       targetRect = inpaint.targetRect;
       placementRect = inpaint.placementRect;
       setProgress(58, true);
-      setStatus(`正在按截图参考重绘：${inpaint.displaySize}`);
+      const referenceSizeHint = inpaint.referenceScale > 1
+        ? `，上传参考图 ${inpaint.referenceCanvasSize}，回贴仍为原选区`
+        : "";
+      setStatus(`正在按截图参考重绘：原选区 ${inpaint.displaySize}${referenceSizeHint}`);
       items = await requestEdits(inpaintSettings, prompt, inpaint.image, null, {
         size: inpaint.apiSize,
         screenshotReferenceEdit: true,
@@ -1349,6 +1354,7 @@ async function runGeneration() {
         const placementRect = stamped[0].placementRect || stamped[0].targetRect;
         await placeResultAsLayer(stamped[0], placementRect, "OpenAI Inpaint", needsPostImportMask ? (stamped[0].cropRect || stamped[0].targetRect) : null, {
           fitByImageSize: shouldMaskInpaint || directSelectionPatch,
+          forceFullImageRect: directSelectionPatch,
           alignVisibleRect: shouldMaskInpaint,
           preserveImageAspect: false,
           rasterizeBeforeMask: needsPostImportMask,
@@ -1569,9 +1575,10 @@ async function runOfflineSixModeDiagnostics() {
       directSelectionPatchCall.hasCropRect ||
       directSelectionPatchCall.useCurrentSelectionMask ||
       directSelectionPatchCall.useSavedSelectionMask ||
-      directSelectionPatchCall.requireMask
+      directSelectionPatchCall.requireMask ||
+      !directSelectionPatchCall.forceFullImageRect
     ) {
-      failures.push("inpaint: 选区重绘没有按原选区直接放回，或仍在使用导入后蒙版");
+      failures.push("inpaint: 选区重绘没有按原选区完整图层矩形放回，或仍在使用导入后蒙版");
     }
     if (!directSelectionPatchCall?.boundsMatchSelection) {
       failures.push("inpaint: 选区重绘真实导入图层边界没有贴回原选区，仍可能出现位置漂移");
@@ -1603,7 +1610,7 @@ async function runOfflineSixModeDiagnostics() {
     const coverageInvariants = [
       `noMaskReference=${selectedReferenceCall && !selectedReferenceCall.hasMask && selectedReferenceCall.screenshotReferenceEdit ? "ok" : "fail"}`,
       `noMaskInpaint=${screenshotInpaintCall && !screenshotInpaintCall.hasMask && screenshotInpaintCall.screenshotReferenceEdit ? "ok" : "fail"}`,
-      `directSelectionPatch=${directSelectionPatchCall && directSelectionPatchCall.fitByImageSize && !directSelectionPatchCall.hasCropRect && !directSelectionPatchCall.requireMask ? "ok" : "fail"}`,
+      `directSelectionPatch=${directSelectionPatchCall && directSelectionPatchCall.fitByImageSize && directSelectionPatchCall.forceFullImageRect && !directSelectionPatchCall.hasCropRect && !directSelectionPatchCall.requireMask ? "ok" : "fail"}`,
       `directSelectionBounds=${directSelectionPatchCall?.boundsMatchSelection ? "ok" : "fail"}`,
       `maskedOutpaint=${maskedOutpaintCall && maskedOutpaintCall.hasMask && !maskedOutpaintCall.screenshotReferenceEdit ? "ok" : "fail"}`,
       `outpaintCanvasExpand=${outpaintCanvasExpandCall && outpaintCanvasExpandCall.targetWidth > outpaintCanvasExpandCall.baseWidth && outpaintCanvasExpandCall.targetHeight > outpaintCanvasExpandCall.baseHeight ? "ok" : "fail"}`,
@@ -1813,6 +1820,7 @@ async function withOfflineDiagnosticStubs(callback) {
       useCurrentSelectionMask: Boolean(opts.useCurrentSelectionMask),
       useSavedSelectionMask: Boolean(opts.useSavedSelectionMask),
       requireMask: Boolean(opts.requireMask),
+      forceFullImageRect: Boolean(opts.forceFullImageRect),
       boundsMatchSelection: false,
       layerBounds: null,
     };
@@ -6781,6 +6789,7 @@ async function importSelected() {
     const alphaStylePatch = itemToPlace?.placementMode === "alpha-style-patch";
     await placeResultAsLayer(itemToPlace, placementRect, layerName, needsPostImportMask ? cropRectToPlace : null, {
       fitByImageSize: isMaskedInpaintLayerResult(itemToPlace) || directSelectionPatch || isSplitElement || alphaStylePatch,
+      forceFullImageRect: directSelectionPatch,
       alignVisibleRect: isMaskedInpaintLayerResult(itemToPlace) || isSplitElement,
       preserveImageAspect: item.mode === "cutout" || item.mode === "outpaint" || item.placementMode === "full-region-patch",
       rasterizeBeforeMask: needsPostImportMask,
@@ -6920,7 +6929,9 @@ async function placeResultAsLayer(item, selectionInfo, layerName, cropRect = nul
 
   if (isSelectionValid(selectionInfo) && importedLayer) {
     if (opts.fitByImageSize) {
-      if (opts.alignVisibleRect && isSelectionValid(itemToImport.importVisibleRect) && shouldAlignByVisibleBounds(importedLayer, imageSize, itemToImport.importVisibleRect)) {
+      if (opts.forceFullImageRect) {
+        await transformLayerToRect(importedLayer, selectionInfo);
+      } else if (opts.alignVisibleRect && isSelectionValid(itemToImport.importVisibleRect) && shouldAlignByVisibleBounds(importedLayer, imageSize, itemToImport.importVisibleRect)) {
         await transformLayerToRect(importedLayer, itemToImport.importVisibleRect);
       } else {
         await transformLayerByImageRect(importedLayer, imageSize, selectionInfo);
@@ -7745,6 +7756,9 @@ async function createInpaintScreenshotInputs(selection, docSize, model) {
     { r: 255, g: 255, b: 255 }
   );
   const paddedReference = await createPaddedScreenshotReferenceBase64(mattedImage);
+  if (paddedReference.scale > 1) {
+    setStatus(`选区较小，已将上传参考图等比放大到 ${paddedReference.crop.width}x${paddedReference.crop.height}；结果仍按原选区 ${targetRect.width}x${targetRect.height} 放回`);
+  }
   const image = paddedReference.b64;
   await saveDebugBase64Image("openai-last-inpaint-input.png", image);
   await saveDebugJsonFile("openai-last-inpaint-input.json", {
@@ -7764,6 +7778,7 @@ async function createInpaintScreenshotInputs(selection, docSize, model) {
     placementRect: targetRect,
     referenceCanvasSize: `${paddedReference.crop.canvasWidth}x${paddedReference.crop.canvasHeight}`,
     sourceNonWhiteRatio: paddedReference.crop.sourceNonWhiteRatio || 0,
+    referenceScale: paddedReference.scale || 1,
     protectedBlankResultSafety: {
       enabledWhenPromptHasPreservationConstraint: true,
       minimumSourceNonWhiteRatio: PROTECTED_REPAINT_MIN_SOURCE_NON_WHITE_RATIO,
@@ -7783,6 +7798,7 @@ async function createInpaintScreenshotInputs(selection, docSize, model) {
     placementRect: targetRect,
     screenshotReferenceEdit: true,
     sourceNonWhiteRatio: paddedReference.crop.sourceNonWhiteRatio || 0,
+    referenceScale: paddedReference.scale || 1,
     referenceCrop: paddedReference.crop,
   };
 }
@@ -7801,7 +7817,7 @@ async function cropScreenshotReferenceEditItems(items, referenceCrop, options = 
         importB64: footprint.b64,
         format: "png",
         url: null,
-        normalizedReferenceFootprint: footprint.normalized,
+        normalizedReferenceFootprint: footprint.normalized || cropped !== pngB64,
       });
     } catch (error) {
       console.warn("[inpaint] padded screenshot result crop failed; refusing unsafe full-canvas placement", error);
@@ -7850,8 +7866,8 @@ async function normalizeScreenshotReferenceResultBase64(b64, referenceCrop, opti
     return { b64, normalized: false };
   }
 
-  const targetWidth = Math.max(1, Math.round(referenceCrop?.width || decoded.width));
-  const targetHeight = Math.max(1, Math.round(referenceCrop?.height || decoded.height));
+  const targetWidth = Math.max(1, Math.round(referenceCrop?.sourceWidth || referenceCrop?.width || decoded.width));
+  const targetHeight = Math.max(1, Math.round(referenceCrop?.sourceHeight || referenceCrop?.height || decoded.height));
   const sizeMismatch = decoded.width !== targetWidth || decoded.height !== targetHeight;
 
   const resized = sizeMismatch
@@ -7968,11 +7984,16 @@ async function createPaddedScreenshotReferenceBase64(b64) {
   const sourceNonWhiteRatio = estimateNonWhiteRgbaRatio(decoded.rgba, decoded.width, decoded.height);
   const sourceContentBounds = findNonWhiteRgbaBounds(decoded.rgba, decoded.width, decoded.height);
   const canvas = getPaddedScreenshotReferenceCanvas(decoded.width, decoded.height);
-  const left = Math.floor((canvas.width - decoded.width) / 2);
-  const top = Math.floor((canvas.height - decoded.height) / 2);
+  const sourceRgba = canvas.width === decoded.width && canvas.height === decoded.height
+    ? decoded.rgba
+    : resizeRgbaBilinear(decoded.rgba, decoded.width, decoded.height, canvas.width, canvas.height);
+  const isUpscaled = canvas.width !== decoded.width || canvas.height !== decoded.height;
+  const left = isUpscaled ? 0 : Math.floor((canvas.width - decoded.width) / 2);
+  const top = isUpscaled ? 0 : Math.floor((canvas.height - decoded.height) / 2);
   if (canvas.width === decoded.width && canvas.height === decoded.height && left === 0 && top === 0) {
     return {
       b64,
+      scale: 1,
       crop: {
         canvasWidth: decoded.width,
         canvasHeight: decoded.height,
@@ -7980,6 +8001,8 @@ async function createPaddedScreenshotReferenceBase64(b64) {
         top: 0,
         width: decoded.width,
         height: decoded.height,
+        sourceWidth: decoded.width,
+        sourceHeight: decoded.height,
         sourceNonWhiteRatio,
         sourceContentBounds,
       },
@@ -7993,16 +8016,19 @@ async function createPaddedScreenshotReferenceBase64(b64) {
     output[index + 2] = 255;
     output[index + 3] = 255;
   }
-  blitRgba(decoded.rgba, decoded.width, decoded.height, output, canvas.width, canvas.height, left, top);
+  blitRgba(sourceRgba, canvas.width, canvas.height, output, canvas.width, canvas.height, left, top);
   return {
     b64: bytesToBase64(encodePngRgba(canvas.width, canvas.height, output)),
+    scale: canvas.width / Math.max(1, decoded.width),
     crop: {
       canvasWidth: canvas.width,
       canvasHeight: canvas.height,
       left,
       top,
-      width: decoded.width,
-      height: decoded.height,
+      width: canvas.width,
+      height: canvas.height,
+      sourceWidth: decoded.width,
+      sourceHeight: decoded.height,
       sourceNonWhiteRatio,
       sourceContentBounds,
     },
@@ -8012,7 +8038,20 @@ async function createPaddedScreenshotReferenceBase64(b64) {
 function getPaddedScreenshotReferenceCanvas(width, height) {
   const sourceWidth = Math.max(1, Math.round(width || 1));
   const sourceHeight = Math.max(1, Math.round(height || 1));
-  return { width: sourceWidth, height: sourceHeight };
+  const minEdge = Math.min(sourceWidth, sourceHeight);
+  if (minEdge >= MIN_SCREENSHOT_REFERENCE_EDGE) {
+    return { width: sourceWidth, height: sourceHeight };
+  }
+  const requestedScale = MIN_SCREENSHOT_REFERENCE_EDGE / minEdge;
+  const maxEdgeScale = MAX_SCREENSHOT_REFERENCE_EDGE / Math.max(sourceWidth, sourceHeight);
+  const scale = Math.max(1, Math.min(requestedScale, maxEdgeScale));
+  if (scale <= 1) {
+    return { width: sourceWidth, height: sourceHeight };
+  }
+  return {
+    width: Math.max(1, Math.round(sourceWidth * scale)),
+    height: Math.max(1, Math.round(sourceHeight * scale)),
+  };
 }
 
 function formatScreenshotReferenceCropBox(crop) {
@@ -8045,7 +8084,12 @@ async function cropPaddedScreenshotResultBase64(b64, crop) {
   if (!crop || !crop.canvasWidth || !crop.canvasHeight || !crop.width || !crop.height) return b64;
   const decoded = await decodePngRgbaBase64(b64);
   if (shouldKeepScreenshotResultWithoutCrop(decoded, crop)) {
-    return b64;
+    const sourceWidth = Math.max(1, Math.round(crop?.sourceWidth || 0));
+    const sourceHeight = Math.max(1, Math.round(crop?.sourceHeight || 0));
+    if (!sourceWidth || !sourceHeight || (decoded.width === sourceWidth && decoded.height === sourceHeight)) {
+      return b64;
+    }
+    return fitScreenshotResultToSelectionCropBase64(decoded, crop);
   }
   if (isDirectScreenshotReferenceCrop(crop)) {
     return fitScreenshotResultToSelectionCropBase64(decoded, crop);
@@ -8114,13 +8158,15 @@ function isSameGeometryScreenshotCanvas(width, height, crop) {
 function fitScreenshotResultToSelectionCropBase64(decoded, crop) {
   const cropWidth = Math.max(1, Math.round(crop?.width || 1));
   const cropHeight = Math.max(1, Math.round(crop?.height || 1));
+  const targetWidth = Math.max(1, Math.round(crop?.sourceWidth || cropWidth));
+  const targetHeight = Math.max(1, Math.round(crop?.sourceHeight || cropHeight));
   const resultWidth = Math.max(1, Math.round(decoded?.width || 1));
   const resultHeight = Math.max(1, Math.round(decoded?.height || 1));
   const sourceRgba = decoded?.rgba;
   if (!sourceRgba || !sourceRgba.length) {
-    return bytesToBase64(encodePngRgba(cropWidth, cropHeight, new Uint8Array(cropWidth * cropHeight * 4).fill(255)));
+    return bytesToBase64(encodePngRgba(targetWidth, targetHeight, new Uint8Array(targetWidth * targetHeight * 4).fill(255)));
   }
-  if (resultWidth === cropWidth && resultHeight === cropHeight) {
+  if (resultWidth === targetWidth && resultHeight === targetHeight) {
     return bytesToBase64(encodePngRgba(resultWidth, resultHeight, sourceRgba));
   }
 
@@ -8164,7 +8210,10 @@ function fitScreenshotResultToSelectionCropBase64(decoded, crop) {
       output[outputOffset + 3] = sourceRgba[sourceOffset + 3];
     }
   }
-  return bytesToBase64(encodePngRgba(cropWidth, cropHeight, output));
+  const fitted = targetWidth === cropWidth && targetHeight === cropHeight
+    ? output
+    : resizeRgbaNearest(output, cropWidth, cropHeight, targetWidth, targetHeight);
+  return bytesToBase64(encodePngRgba(targetWidth, targetHeight, fitted));
 }
 
 function getScreenshotResultContentAwareFitCrop(decoded, crop, sourceWidth, sourceHeight) {

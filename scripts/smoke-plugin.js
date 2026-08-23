@@ -573,6 +573,7 @@ async function runVmSmoke() {
           placedSize?.width || null,
           placedSize?.height || null,
           Boolean(item.normalizedPlacementSize),
+          Boolean(opts.forceFullImageRect),
         ]);
       };
       expandCanvasForOutpaint = async (padding, rect) => calls.push(["expand", padding && padding.left, rect && rect.width]);
@@ -1892,13 +1893,14 @@ async function runVmSmoke() {
       assert(mattedDecoded.rgba[4] > 175 && mattedDecoded.rgba[5] > 145 && mattedDecoded.rgba[7] === 255, "Semi-transparent screenshot pixels should be white-matted and opaque");
       const padded = await createPaddedScreenshotReferenceBase64(bytesToBase64(encodePngRgba(2, 2, mattedDecoded.rgba)));
       const paddedDecoded = await decodePngRgbaBase64(padded.b64);
-      assert(paddedDecoded.width === 2 && paddedDecoded.height === 2, "Small screenshot repaint inputs should upload the selected crop itself without adding shrink-inducing white padding");
-      assert(padded.crop.left === 0 && padded.crop.top === 0 && padded.crop.width === 2 && padded.crop.height === 2, "Screenshot crop metadata should map directly to the original selection");
+      assert(paddedDecoded.width >= MIN_SCREENSHOT_REFERENCE_EDGE && paddedDecoded.height >= MIN_SCREENSHOT_REFERENCE_EDGE, "Tiny screenshot repaint inputs should be upscaled before upload so the image API does not receive undersized pixels");
+      assert(padded.crop.left === 0 && padded.crop.top === 0 && padded.crop.width === paddedDecoded.width && padded.crop.height === paddedDecoded.height, "Upscaled screenshot crop metadata should map the full uploaded reference canvas");
+      assert(padded.crop.sourceWidth === 2 && padded.crop.sourceHeight === 2 && padded.scale > 1, "Upscaled screenshot metadata should retain the original selected crop dimensions");
       const tinyWidePixels = new Uint8Array(40 * 30 * 4).fill(255);
       const tinyWidePadded = await createPaddedScreenshotReferenceBase64(bytesToBase64(encodePngRgba(40, 30, tinyWidePixels)));
       const tinyWideCropped = await cropPaddedScreenshotResultBase64(tinyWidePadded.b64, tinyWidePadded.crop);
       const tinyWideCroppedDecoded = await decodePngRgbaBase64(tinyWideCropped);
-      assert(tinyWideCroppedDecoded.width === 40 && tinyWideCroppedDecoded.height === 30, "Small non-square padded screenshot results should crop back only when the returned image still looks like the padded white canvas");
+      assert(tinyWideCroppedDecoded.width === 40 && tinyWideCroppedDecoded.height === 30, "Small non-square screenshot results should crop and normalize back to the original selected crop dimensions");
       const solidSquareWrongCropPixels = new Uint8Array(512 * 512 * 4);
       for (let index = 0; index < solidSquareWrongCropPixels.length; index += 4) {
         solidSquareWrongCropPixels[index] = 82;
@@ -1909,15 +1911,15 @@ async function runVmSmoke() {
       const fittedUnverifiedPaddedCrop = await cropPaddedScreenshotResultBase64(bytesToBase64(encodePngRgba(512, 512, solidSquareWrongCropPixels)), tinyWidePadded.crop);
       const fittedUnverifiedPaddedCropDecoded = await decodePngRgbaBase64(fittedUnverifiedPaddedCrop);
       assert(fittedUnverifiedPaddedCropDecoded.width === 40 && fittedUnverifiedPaddedCropDecoded.height === 30, "Small screenshot crop-back should fit square outputs to the selected crop instead of rejecting them");
-      const largeScreenshotPixels = new Uint8Array(320 * 240 * 4).fill(255);
-      const directReference = await createPaddedScreenshotReferenceBase64(bytesToBase64(encodePngRgba(320, 240, largeScreenshotPixels)));
+      const largeScreenshotPixels = new Uint8Array(320 * 256 * 4).fill(255);
+      const directReference = await createPaddedScreenshotReferenceBase64(bytesToBase64(encodePngRgba(320, 256, largeScreenshotPixels)));
       const directReferenceDecoded = await decodePngRgbaBase64(directReference.b64);
-      assert(directReferenceDecoded.width === 320 && directReferenceDecoded.height === 240, "Normal-sized screenshot repaint inputs should upload the selected crop itself without white context margin");
+      assert(directReferenceDecoded.width === 320 && directReferenceDecoded.height === 256, "Normal-sized screenshot repaint inputs should upload the selected crop itself without white context margin");
       assert(directReferenceDecoded.width !== directReferenceDecoded.height, "Normal-sized screenshot repaint inputs should not be forced into an unrelated square canvas");
-      assert(directReference.crop.left === 0 && directReference.crop.top === 0 && directReference.crop.width === 320 && directReference.crop.height === 240, "Normal screenshot reference crop metadata should record a direct selected-crop upload");
+      assert(directReference.crop.left === 0 && directReference.crop.top === 0 && directReference.crop.width === 320 && directReference.crop.height === 256, "Normal screenshot reference crop metadata should record a direct selected-crop upload");
       const fittedWrongRatioDirectScreenshot = await cropPaddedScreenshotResultBase64(bytesToBase64(encodePngRgba(1024, 1024, new Uint8Array(1024 * 1024 * 4).fill(255))), directReference.crop);
       const fittedWrongRatioDirectScreenshotDecoded = await decodePngRgbaBase64(fittedWrongRatioDirectScreenshot);
-      assert(fittedWrongRatioDirectScreenshotDecoded.width === 320 && fittedWrongRatioDirectScreenshotDecoded.height === 240, "Normal screenshot repaint should fit square or wrong-ratio model outputs to the selected crop instead of rejecting them");
+      assert(fittedWrongRatioDirectScreenshotDecoded.width === 320 && fittedWrongRatioDirectScreenshotDecoded.height === 256, "Normal screenshot repaint should fit square or wrong-ratio model outputs to the selected crop instead of rejecting them");
       const wideSelectionReference = {
         canvasWidth: 1075,
         canvasHeight: 261,
@@ -1941,7 +1943,7 @@ async function runVmSmoke() {
       const scaledAlreadyCropped = bytesToBase64(encodePngRgba(3, 3, new Uint8Array(3 * 3 * 4).fill(255)));
       const keptScaledAlreadyCropped = await cropPaddedScreenshotResultBase64(scaledAlreadyCropped, padded.crop);
       const keptScaledAlreadyCroppedDecoded = await decodePngRgbaBase64(keptScaledAlreadyCropped);
-      assert(keptScaledAlreadyCroppedDecoded.width === 3 && keptScaledAlreadyCroppedDecoded.height === 3, "Near selection-sized screenshot edit results should not be cropped with padded-canvas coordinates");
+      assert(keptScaledAlreadyCroppedDecoded.width === 2 && keptScaledAlreadyCroppedDecoded.height === 2, "Near selection-sized screenshot edit results should normalize to the original tiny selection dimensions");
       const squareSelectionOnly = new Uint8Array(640 * 640 * 4);
       for (let index = 0; index < squareSelectionOnly.length; index += 4) {
         squareSelectionOnly[index] = 72;
@@ -1952,7 +1954,7 @@ async function runVmSmoke() {
       const squareSelectionOnlyB64 = bytesToBase64(encodePngRgba(640, 640, squareSelectionOnly));
       const keptSquareSelectionOnly = await cropPaddedScreenshotResultBase64(squareSelectionOnlyB64, padded.crop);
       const keptSquareSelectionOnlyDecoded = await decodePngRgbaBase64(keptSquareSelectionOnly);
-      assert(keptSquareSelectionOnlyDecoded.width === 640 && keptSquareSelectionOnlyDecoded.height === 640, "Upscaled square selection-only screenshot results should not be mistaken for a padded square canvas");
+      assert(keptSquareSelectionOnlyDecoded.width === 2 && keptSquareSelectionOnlyDecoded.height === 2, "Upscaled square selection-only screenshot results should normalize to the original tiny selection dimensions");
       const bowHandPixels = new Uint8Array(4 * 3 * 4);
       for (let i = 0; i < bowHandPixels.length; i += 4) {
         bowHandPixels[i] = 0;
@@ -1994,15 +1996,14 @@ async function runVmSmoke() {
       saveDebugBase64Image = savedDebugBase64Image;
       saveDebugJsonFile = savedDebugJsonFileForInpaintInput;
       const bowHandReference = await decodePngRgbaBase64(bowHandInpaint.image);
-      const cropOffset = (bowHandInpaint.referenceCrop.top * bowHandReference.width + bowHandInpaint.referenceCrop.left) * 4;
-      const bowOffset = ((bowHandInpaint.referenceCrop.top + 1) * bowHandReference.width + bowHandInpaint.referenceCrop.left + 1) * 4;
-      const handOffset = ((bowHandInpaint.referenceCrop.top + 2) * bowHandReference.width + bowHandInpaint.referenceCrop.left + 2) * 4;
+      const bowHandContentBounds = findNonWhiteRgbaBounds(bowHandReference.rgba, bowHandReference.width, bowHandReference.height);
       assert(bowHandInpaint.mask === null && bowHandInpaint.screenshotReferenceEdit === true, "Screenshot repaint workflow should produce a normal image reference and no API mask");
       assert(debugInpaintMeta?.workflow === "screenshot-reference-edit", "Screenshot repaint debug metadata should identify the screenshot-reference edit workflow");
       assert(debugInpaintMeta?.hasMask === false && debugInpaintMeta?.maskBytes === 0 && debugInpaintMeta?.maskFormat === null, "Screenshot repaint debug metadata should prove no API mask was attached");
       assert(debugInpaintMeta?.uploadIsNormalImage === true && debugInpaintMeta?.whiteMatted === true, "Screenshot repaint debug metadata should mark the upload as a white-matted normal image");
-      assert(debugInpaintMeta?.referenceCanvasSize === "4x3", "Screenshot repaint debug metadata should record the selected crop as the uploaded white reference canvas size");
-      assert(String(debugInpaintMeta?.referenceCropBox || "").includes("4x3"), "Screenshot repaint debug metadata should record the selected Photoshop crop box");
+      assert(debugInpaintMeta?.referenceCanvasSize === String(bowHandReference.width) + "x" + String(bowHandReference.height), "Screenshot repaint debug metadata should record the actual uploaded white reference canvas size");
+      assert(String(debugInpaintMeta?.referenceCropBox || "").includes(String(bowHandReference.width) + "x" + String(bowHandReference.height)), "Screenshot repaint debug metadata should record the uploaded screenshot crop box");
+      assert(debugInpaintMeta?.referenceScale > 1, "Screenshot repaint debug metadata should record that a tiny selected crop was upscaled for upload");
       assert(debugInpaintMeta?.sourceNonWhiteRatio > 0.1, "Screenshot repaint debug metadata should expose the original selection non-white content ratio");
       assert(debugInpaintMeta?.protectedBlankResultSafety?.enabledWhenPromptHasPreservationConstraint === true, "Screenshot repaint debug metadata should document when blank-result protection is enabled");
       assert(debugInpaintMeta?.protectedBlankResultSafety?.minimumSourceNonWhiteRatio === PROTECTED_REPAINT_MIN_SOURCE_NON_WHITE_RATIO, "Screenshot repaint debug metadata should expose the source non-white safety threshold");
@@ -2010,11 +2011,9 @@ async function runVmSmoke() {
       assert(!JSON.stringify(debugInpaintMeta).includes(stripDataUrl(bowHandInpaint.image).slice(0, 24)), "Screenshot repaint debug metadata must not include image base64 bytes");
       assert(bowHandInpaint.referenceCrop.sourceNonWhiteRatio > 0.1, "Screenshot repaint crop metadata should record that the original protected selection has visible non-white content");
       assert(bowHandInpaint.targetRect.left === 3 && bowHandInpaint.placementRect.width === 4, "Screenshot repaint should place the result back on the exact Photoshop selection");
-      assert(bowHandReference.width === 4 && bowHandReference.height === 3, "Bow/hand screenshot reference should upload the exact selected crop instead of a shrink-inducing padded square");
+      assert(bowHandReference.width >= MIN_SCREENSHOT_REFERENCE_EDGE && bowHandReference.height >= MIN_SCREENSHOT_REFERENCE_EDGE, "Bow/hand screenshot reference should upscale the tiny selected crop before upload");
       assert(bowHandReference.rgba[3] === 255 && bowHandReference.rgba[0] === 255 && bowHandReference.rgba[1] === 255 && bowHandReference.rgba[2] === 255, "Transparent screenshot background should become opaque white before upload");
-      assert(bowHandReference.rgba[cropOffset + 3] === 255 && bowHandReference.rgba[cropOffset] === 255, "Original transparent selection pixels should be white-matted inside the crop");
-      assert(bowHandReference.rgba[bowOffset] === 122 && bowHandReference.rgba[bowOffset + 1] === 75 && bowHandReference.rgba[bowOffset + 3] === 255, "Protected bow pixels should be preserved in the uploaded screenshot reference");
-      assert(bowHandReference.rgba[handOffset] > 224 && bowHandReference.rgba[handOffset + 3] === 255, "Semi-transparent hand pixels should be composited into the screenshot reference instead of becoming mask alpha");
+      assert(bowHandContentBounds && bowHandContentBounds.width > 0 && bowHandContentBounds.height > 0, "Protected bow/hand content should survive tiny-crop upscaling in the uploaded screenshot reference");
       assert(debugInpaintInput === bowHandInpaint.image, "Screenshot repaint debug input should save the actual padded image sent to the model");
       const cupStickerPixels = new Uint8Array(5 * 4 * 4);
       for (let i = 0; i < cupStickerPixels.length; i += 4) {
@@ -2052,14 +2051,13 @@ async function runVmSmoke() {
       saveDebugBase64Image = savedDebugBase64Image;
       saveDebugJsonFile = savedDebugJsonFileForInpaintInput;
       const genericStickerReference = await decodePngRgbaBase64(genericStickerInpaint.image);
-      const genericCupOffset = ((genericStickerInpaint.referenceCrop.top + 1) * genericStickerReference.width + genericStickerInpaint.referenceCrop.left + 1) * 4;
-      const genericStickerOffset = ((genericStickerInpaint.referenceCrop.top + 2) * genericStickerReference.width + genericStickerInpaint.referenceCrop.left + 3) * 4;
+      const genericStickerContentBounds = findNonWhiteRgbaBounds(genericStickerReference.rgba, genericStickerReference.width, genericStickerReference.height);
       assert(genericStickerInpaint.mask === null && genericStickerInpaint.screenshotReferenceEdit === true, "Generic sticker/cup repaint should produce a normal image reference and no API mask");
       assert(genericDebugMeta?.workflow === "screenshot-reference-edit" && genericDebugMeta?.hasMask === false, "Generic sticker/cup repaint debug metadata should prove the no-mask workflow");
-      assert(genericDebugMeta?.displaySize === "5x4" && String(genericDebugMeta?.referenceCropBox || "").includes("5x4"), "Generic sticker/cup repaint debug metadata should keep arbitrary crop geometry");
+      assert(genericDebugMeta?.displaySize === "5x4" && String(genericDebugMeta?.referenceCropBox || "").includes(String(genericStickerReference.width) + "x" + String(genericStickerReference.height)), "Generic sticker/cup repaint debug metadata should keep original display geometry and actual upload crop geometry");
       assert(genericStickerInpaint.referenceCrop.sourceNonWhiteRatio > 0.1, "Generic sticker/cup repaint should record visible protected content in the source crop");
-      assert(genericStickerReference.rgba[genericCupOffset] === 68 && genericStickerReference.rgba[genericCupOffset + 1] === 148 && genericStickerReference.rgba[genericCupOffset + 3] === 255, "Generic protected cup pixels should be preserved in the uploaded screenshot reference");
-      assert(genericStickerReference.rgba[genericStickerOffset] > 235 && genericStickerReference.rgba[genericStickerOffset + 1] < 90 && genericStickerReference.rgba[genericStickerOffset + 3] === 255, "Generic semi-transparent sticker pixels should upload as ordinary white-matted pixels, not mask alpha");
+      assert(genericStickerReference.width >= MIN_SCREENSHOT_REFERENCE_EDGE && genericStickerReference.height >= MIN_SCREENSHOT_REFERENCE_EDGE, "Generic tiny screenshot crops should upscale before upload");
+      assert(genericStickerContentBounds && genericStickerContentBounds.width > 0 && genericStickerContentBounds.height > 0, "Generic protected cup/sticker content should survive tiny-crop upscaling");
       assert(!JSON.stringify(genericDebugMeta).includes(stripDataUrl(genericStickerInpaint.image).slice(0, 24)), "Generic screenshot repaint debug metadata must not include image base64 bytes");
       const blankProtectedResult = bytesToBase64(encodePngRgba(4, 3, new Uint8Array(4 * 3 * 4).fill(255)));
       let refusedBlankProtectedCrop = false;
@@ -2072,16 +2070,16 @@ async function runVmSmoke() {
       const allowedBlankUnprotectedItems = await cropScreenshotReferenceEditItems([{ b64: blankProtectedResult, format: "png" }], bowHandInpaint.referenceCrop, { requireProtectedContent: false });
       const allowedBlankUnprotected = await decodePngRgbaBase64(allowedBlankUnprotectedItems[0].b64);
       assert(allowedBlankUnprotected.width === 4 && allowedBlankUnprotected.height === 3, "Unprotected screenshot repaint removals may still crop an all-white returned reference canvas");
-      const normalSelectionPixels = new Uint8Array(320 * 180 * 4).fill(255);
-      const normalSelectionReference = await createPaddedScreenshotReferenceBase64(bytesToBase64(encodePngRgba(320, 180, normalSelectionPixels)));
+      const normalSelectionPixels = new Uint8Array(320 * 256 * 4).fill(255);
+      const normalSelectionReference = await createPaddedScreenshotReferenceBase64(bytesToBase64(encodePngRgba(320, 256, normalSelectionPixels)));
       const normalSelectionDecoded = await decodePngRgbaBase64(normalSelectionReference.b64);
-      assert(normalSelectionDecoded.width === 320 && normalSelectionDecoded.height === 180, "Normal-sized screenshot repaint references should stay as a tight selected crop to avoid shrinking the subject");
+      assert(normalSelectionDecoded.width === 320 && normalSelectionDecoded.height === 256, "Normal-sized screenshot repaint references should stay as a tight selected crop to avoid shrinking the subject");
       assert(normalSelectionDecoded.width !== normalSelectionDecoded.height, "Normal-sized screenshot repaint context margin must not force an unrelated square canvas");
       assert(normalSelectionReference.crop.left === 0 && normalSelectionReference.crop.top === 0, "Normal-sized screenshot repaint should not add an offset inside a larger white canvas");
       const croppedNormalSelection = await cropScreenshotReferenceEditItems([{ b64: normalSelectionReference.b64, format: "png" }], normalSelectionReference.crop);
       const croppedNormalDecoded = await decodePngRgbaBase64(croppedNormalSelection[0].b64);
-      assert(croppedNormalDecoded.width === 320 && croppedNormalDecoded.height === 180, "Normal-sized screenshot repaint canvas results should crop back to the selected Photoshop rectangle");
-      const footprintSourcePixels = new Uint8Array(120 * 80 * 4).fill(255);
+      assert(croppedNormalDecoded.width === 320 && croppedNormalDecoded.height === 256, "Normal-sized screenshot repaint canvas results should crop back to the selected Photoshop rectangle");
+      const footprintSourcePixels = new Uint8Array(320 * 256 * 4).fill(255);
       const fillRect = (pixels, canvasWidth, left, top, width, height, color) => {
         for (let y = top; y < top + height; y += 1) {
           for (let x = left; x < left + width; x += 1) {
@@ -2093,26 +2091,26 @@ async function runVmSmoke() {
           }
         }
       };
-      fillRect(footprintSourcePixels, 120, 20, 12, 80, 55, [88, 54, 28, 255]);
-      const footprintReference = await createPaddedScreenshotReferenceBase64(bytesToBase64(encodePngRgba(120, 80, footprintSourcePixels)));
-      const shiftedFootprintPixels = new Uint8Array(120 * 80 * 4).fill(255);
-      fillRect(shiftedFootprintPixels, 120, 35, 20, 80, 55, [88, 54, 28, 255]);
+      fillRect(footprintSourcePixels, 320, 20, 12, 80, 55, [88, 54, 28, 255]);
+      const footprintReference = await createPaddedScreenshotReferenceBase64(bytesToBase64(encodePngRgba(320, 256, footprintSourcePixels)));
+      const shiftedFootprintPixels = new Uint8Array(320 * 256 * 4).fill(255);
+      fillRect(shiftedFootprintPixels, 320, 35, 20, 80, 55, [88, 54, 28, 255]);
       const shiftedFootprintItems = await cropScreenshotReferenceEditItems([
-        { b64: bytesToBase64(encodePngRgba(120, 80, shiftedFootprintPixels)), format: "png" },
+        { b64: bytesToBase64(encodePngRgba(320, 256, shiftedFootprintPixels)), format: "png" },
       ], footprintReference.crop);
       const restoredFootprint = await decodePngRgbaBase64(shiftedFootprintItems[0].b64);
       const restoredBounds = findNonWhiteRgbaBounds(restoredFootprint.rgba, restoredFootprint.width, restoredFootprint.height);
       assert(shiftedFootprintItems[0].normalizedReferenceFootprint === false, "Selection-sized repaint returns should not be source-aligned inside the PNG");
       assert(Math.abs(restoredBounds.left - 35) <= 1 && Math.abs(restoredBounds.top - 20) <= 1, "Selection-sized repaint returns should keep the model-returned internal position; Photoshop placement handles the full crop bounds");
       assert(Math.abs(restoredBounds.width - 80) <= 1 && Math.abs(restoredBounds.height - 55) <= 1, "Selection-sized repaint returns should preserve the returned subject size before Photoshop placement");
-      const highResShiftedPixels = new Uint8Array(240 * 160 * 4).fill(255);
-      fillRect(highResShiftedPixels, 240, 70, 40, 160, 110, [88, 54, 28, 255]);
+      const highResShiftedPixels = new Uint8Array(640 * 512 * 4).fill(255);
+      fillRect(highResShiftedPixels, 640, 70, 40, 160, 110, [88, 54, 28, 255]);
       const normalizedHighResItems = await cropScreenshotReferenceEditItems([
-        { b64: bytesToBase64(encodePngRgba(240, 160, highResShiftedPixels)), format: "png" },
+        { b64: bytesToBase64(encodePngRgba(640, 512, highResShiftedPixels)), format: "png" },
       ], footprintReference.crop);
       const normalizedHighRes = await decodePngRgbaBase64(normalizedHighResItems[0].b64);
       const normalizedHighResBounds = findNonWhiteRgbaBounds(normalizedHighRes.rgba, normalizedHighRes.width, normalizedHighRes.height);
-      assert(normalizedHighRes.width === 120 && normalizedHighRes.height === 80, "High-resolution same-ratio screenshot returns should be normalized back to the Photoshop selection dimensions before placement");
+      assert(normalizedHighRes.width === 320 && normalizedHighRes.height === 256, "High-resolution same-ratio screenshot returns should be normalized back to the Photoshop selection dimensions before placement");
       assert(Math.abs(normalizedHighResBounds.left - 35) <= 1 && Math.abs(normalizedHighResBounds.top - 20) <= 1, "High-resolution same-ratio screenshot returns should only be resized, not source-aligned inside the PNG");
       assert(Math.abs(normalizedHighResBounds.width - 80) <= 1 && Math.abs(normalizedHighResBounds.height - 55) <= 1, "High-resolution same-ratio resize should preserve the returned subject size ratio");
       const grayMarginPixels = new Uint8Array(normalSelectionDecoded.rgba);
@@ -2137,7 +2135,7 @@ async function runVmSmoke() {
         { b64: bytesToBase64(encodePngRgba(normalSelectionDecoded.width, normalSelectionDecoded.height, grayMarginPixels)), format: "png" },
       ], normalSelectionReference.crop);
       const grayMarginDecoded = await decodePngRgbaBase64(grayMarginCropped[0].b64);
-      assert(grayMarginDecoded.width === 320 && grayMarginDecoded.height === 180, "Same-geometry screenshot repaint results should crop back even when the model slightly changes the white margin");
+      assert(grayMarginDecoded.width === 320 && grayMarginDecoded.height === 256, "Same-geometry screenshot repaint results should crop back even when the model slightly changes the white margin");
       const croppedBowHandItems = await cropScreenshotReferenceEditItems([{ b64: bowHandInpaint.image, format: "png" }], bowHandInpaint.referenceCrop);
       const croppedBowHand = await decodePngRgbaBase64(croppedBowHandItems[0].b64);
       assert(croppedBowHand.width === 4 && croppedBowHand.height === 3, "Screenshot repaint result should crop back to the selected Photoshop rectangle before placement");
@@ -2389,7 +2387,7 @@ async function runVmSmoke() {
       assert(calls.some((call) => call[0] === "edit" && call[1] === "reference" && call[2] === false && call[3] === true), "selected reference edit branch should use the no-mask normal-upload Responses path");
       assert(calls.some((call) => call[0] === "edit" && call[1] === "inpaint" && call[2] === false && call[3] === true), "inpaint screenshot-reference branch should call image edits without a mask");
       assert(calls.some((call) => call[0] === "edit" && call[1] === "inpaint" && call[4] === "test prompt"), "inpaint screenshot-reference branch should pass the user's prompt directly");
-      assert(calls.some((call) => call[0] === "place" && call[1] === "inpaint" && call[3] === 40 && call[4] === "direct-selection-patch" && call[5] === null && call[6] === true && call[7] === false && call[8] === false && call[9] === false && call[10] === false && call[11] === false && call[12] === true && call[13] === false), "inpaint should place the screenshot result by full image size over the selected rectangle without Photoshop post-import mask action");
+      assert(calls.some((call) => call[0] === "place" && call[1] === "inpaint" && call[3] === 40 && call[4] === "direct-selection-patch" && call[5] === null && call[6] === true && call[7] === false && call[8] === false && call[9] === false && call[10] === false && call[11] === false && call[12] === true && call[13] === false && call[17] === true), "inpaint should place the screenshot result by the full image rectangle over the selected rectangle without Photoshop post-import mask action");
       assert(calls.some((call) => call[0] === "edit" && call[1] === "outpaint" && call[2] === true), "outpaint edit branch");
       assert(calls.some((call) => call[0] === "cutout"), "cutout branch");
       assert(calls.some((call) => call[0] === "split"), "split branch");

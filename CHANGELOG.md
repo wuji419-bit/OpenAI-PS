@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.310] - 2026-08-22
+
+### Fixed
+
+- Tiny selection repaint inputs are upscaled proportionally before upload so image APIs do not reject undersized references; the original selection dimensions remain recorded for result normalization.
+- Direct selection repaint layers are now transformed by their complete imported image bounds to the original Photoshop selection rectangle, preserving the original position and size for automatic and historical imports.
+
 ## [0.1.309] - 2026-08-22
 
 ### Changed
