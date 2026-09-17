@@ -8,7 +8,7 @@ const imaging = photoshop.imaging;
 const constants = photoshop.constants || {};
 const fs = storage.localFileSystem;
 const PLUGIN_ID = "com.local.openai.photoshop.generator";
-const PLUGIN_VERSION = "0.1.310";
+const PLUGIN_VERSION = "0.1.311";
 
 entrypoints.setup({
   panels: {
@@ -33,7 +33,7 @@ const DEFAULT_CUTOUT_ANALYSIS_MODEL = "gpt-5.5";
 const DEFAULT_SEMANTIC_EDIT_MODEL = "gpt-5.5";
 const DEFAULT_GPT_IMAGE2_ALPHA_PROMPT = "图一是我的特效贴图，帮我把图二的风格元素转移到图一的特效贴图上面，保持图一的剪影、造型和数量，必须还是图一的样式输出，我要拿去做特效用。";
 const GPT_IMAGE2_ALPHA_FIXED_BACKGROUND_PROMPT = "输出背景是50%灰，色号是#808080，不要阴影脏边，不要发光污染，不要模糊，不要改变数量，不要重新排版，不要生成新图标。";
-const RESPONSES_MAIN_MODEL_FALLBACKS = ["gpt-5.5", "gpt-5", "gpt-4.1", "gpt-4o"];
+const RESPONSES_MAIN_MODEL_FALLBACKS = ["gpt-5.5", "gpt-5", "gpt-6-astra", "gpt-4.1", "gpt-4o"];
 const COMFY_INPAINT_MAX_PIXELS = 1600 * 1600;
 const COMFY_INPAINT_MAX_EDGE = 1600;
 const OPENAI_INPAINT_FULL_CANVAS_MAX_PIXELS = 3840 * 2160;
@@ -268,6 +268,23 @@ function syncVersionLabels() {
   }
 }
 
+function syncModelTierButtons(model) {
+  const cleanModel = String(model || "").trim().toLowerCase();
+  const segment = $("modelTierSegment");
+  if (!segment) return;
+  const buttons = segment.querySelectorAll ? segment.querySelectorAll("button") : [];
+  if (buttons && buttons.forEach) {
+    buttons.forEach((btn) => {
+      const tier = String(btn?.dataset?.tier || "").toLowerCase();
+      if (tier && (tier === cleanModel || cleanModel.startsWith(tier))) {
+        btn?.classList?.add("is-active");
+      } else {
+        btn?.classList?.remove("is-active");
+      }
+    });
+  }
+}
+
 function bindEvents() {
   $("modeGrid").addEventListener("click", (event) => {
     const button = event.target.closest("[data-mode]");
@@ -338,6 +355,24 @@ function bindEvents() {
   $("loadHistoryBtn").addEventListener("click", loadHistory);
   $("clearHistoryBtn").addEventListener("click", clearHistory);
   $("countInput").addEventListener("input", syncCountUI);
+  $("modelTierSegment")?.addEventListener("click", (event) => {
+    const button = event.target?.closest?.("button[data-tier]");
+    if (!button) return;
+    const tier = button.dataset.tier;
+    if (!tier) return;
+    $("modelInput").value = tier;
+    syncModelTierButtons(tier);
+    saveSettings();
+    setStatus(`已切换模型：${tier === "gpt-image-2.5-flare" ? "快速 (Flare)" : "深度 (Sunburst)"}`);
+  });
+  $("modelInput")?.addEventListener("input", () => {
+    syncModelTierButtons($("modelInput").value);
+  });
+  $("transparentBgInput")?.addEventListener("change", () => {
+    saveSettings();
+    setStatus($("transparentBgInput").checked ? "已开启透明背景输出" : "已设为自动背景");
+  });
+
   $("apiKeyInput").addEventListener("input", updateKeyBadge);
 
   document.addEventListener("click", (event) => {
@@ -359,11 +394,12 @@ function loadSettings() {
     baseUrl: DEFAULT_BASE_URL,
     comfyUrl: DEFAULT_COMFY_URL,
     apiKey: "",
-    model: "gpt-image-2",
+    model: "gpt-image-2.5-flare",
     generationPath: "/images/generations",
     editPath: "/images/edits",
     size: "auto",
     quality: "auto",
+    background: "auto",
     count: 1,
     format: "png",
     koukoutuApiKey: "",
@@ -390,6 +426,10 @@ function loadSettings() {
   $("qualityInput").value = normalizeResponsesImageQuality(settings.quality);
   $("countInput").value = clampInteger(settings.count, 1, MAX_BATCH_COUNT, 1);
   $("formatInput").value = "png";
+  if ($("transparentBgInput")) {
+    $("transparentBgInput").checked = settings.background === "transparent";
+  }
+  syncModelTierButtons(settings.model);
   renderStyleReference();
 }
 
@@ -427,7 +467,8 @@ function applyAuthJson() {
   $("baseUrlInput").value = "https://api.openai.com/v1";
   $("apiKeyInput").value = apiKey;
   $("quickApiKeyInput").value = apiKey;
-  $("modelInput").value = "gpt-image-2";
+  $("modelInput").value = "gpt-image-2.5-flare";
+  syncModelTierButtons("gpt-image-2.5-flare");
   $("generationPathInput").value = "/images/generations";
   $("editPathInput").value = "/images/edits";
   $("authJsonInput").value = "";
@@ -548,11 +589,12 @@ function getSettings() {
     baseUrl,
     comfyUrl,
     apiKey: $("apiKeyInput").value.trim(),
-    model: $("modelInput").value.trim() || "gpt-image-2",
+    model: $("modelInput").value.trim() || "gpt-image-2.5-flare",
     generationPath: normalizePath($("generationPathInput").value.trim() || "/images/generations"),
     editPath: normalizePath($("editPathInput").value.trim() || "/images/edits"),
     size: $("sizeInput").value,
     quality: normalizeResponsesImageQuality($("qualityInput").value),
+    background: $("transparentBgInput")?.checked ? "transparent" : normalizeImageBackground(readJsonLocal(SETTINGS_KEY, {})?.background || "auto"),
     count: clampInteger($("countInput").value, 1, MAX_BATCH_COUNT, 1),
     format: "png",
     koukoutuApiKey: $("koukoutuApiKeyInput").value.trim(),
@@ -1013,6 +1055,14 @@ async function testKoukoutuConnection() {
   setStatus("抠抠图 API Key 已保存；首次抠图时会验证额度和权限");
 }
 
+function resolveSplitImageModel(model) {
+  const current = String(model || "").trim();
+  if (/gpt-image-2\.5-sunburst/i.test(current)) return current;
+  if (/gpt-image-2\.5/i.test(current)) return "gpt-image-2.5-sunburst";
+  if (isGptImage2OrNewerModel(current)) return current;
+  return "gpt-image-2.5-sunburst";
+}
+
 async function runGeneration() {
   if (state.busy) return;
 
@@ -1020,8 +1070,9 @@ async function runGeneration() {
   $("baseUrlInput").value = settings.baseUrl;
   $("comfyUrlInput").value = settings.comfyUrl;
   if (state.mode !== "cutout" && state.mode !== "inpaint" && isComfyModel(settings.model)) {
-    settings.model = "gpt-image-2";
+    settings.model = "gpt-image-2.5-flare";
     $("modelInput").value = settings.model;
+    syncModelTierButtons(settings.model);
   }
   if (state.mode === "cutout" && !settings.koukoutuApiKey) {
     setStatus("请先在设置里填写抠抠图 API Key");
@@ -1138,10 +1189,7 @@ async function runGeneration() {
         const docSize = getDocumentSize();
         const fullRect = getFullDocumentRect(docSize);
         setStatus("正在导出整张画布作为无 Mask 普通参考图...");
-        const image = await matteTransparentPngBase64(
-          await exportActiveDocumentAsBase64(),
-          { r: 255, g: 255, b: 255 }
-        );
+        const image = await exportActiveDocumentAsBase64();
         await saveDebugBase64Image("openai-last-reference-full.png", image);
         outputSize = `${fullRect.width}x${fullRect.height}`;
         targetRect = fullRect;
@@ -1172,7 +1220,7 @@ async function runGeneration() {
       const inpaintSettings = getInpaintSettings(settings);
       const editSelection = selection;
       setProgress(40, true);
-      setStatus("正在把选区导出为白底截图参考图...");
+      setStatus("正在把选区导出为截图参考图...");
       const inpaint = await createInpaintScreenshotInputs(editSelection, docSize, settings.model);
       outputSize = inpaint.displaySize;
       targetRect = inpaint.targetRect;
@@ -1241,10 +1289,11 @@ async function runGeneration() {
       const image = splitInput.image;
       const splitSettings = {
         ...settings,
-        model: "gpt-image-2",
+        model: resolveSplitImageModel(settings.model),
         count: 1,
         format: "png",
         quality: "auto",
+        background: "transparent",
       };
       outputSize = `${docSize.width} x ${docSize.height}`;
       targetRect = fullRect;
@@ -3031,7 +3080,7 @@ async function requestSemanticSplitLayers(settings, imageB64, docSize, targets) 
   for (let index = 0; index < total; index += 1) {
     const target = targets[index];
     setProgress(45 + Math.round((index / total) * 36), true);
-    setStatus(`正在用 gpt-image-2 ${transparentPreferred ? "透明 PNG" : "白底"}重绘拆图层 ${index + 1}/${total}：${target.label}`);
+    setStatus(`正在用 ${settings.model || "GPT Image"} ${transparentPreferred ? "透明 PNG" : "白底"}重绘拆图层 ${index + 1}/${total}：${target.label}`);
     const prompt = buildSemanticSplitLayerPrompt(target, index, total, docSize, { transparent: transparentPreferred });
     try {
       await settleBeforeSemanticSplitLayerRequest(settings, index);
@@ -3740,8 +3789,12 @@ function getImageEditInputFidelity(model, preserveInput = false) {
   return "";
 }
 
+function isGptImage2OrNewerModel(model) {
+  return /^gpt-image-(?:2(?:\.5)?|[3-9])(?:$|[-_.:])/i.test(String(model || "").trim());
+}
+
 function isGptImage2Model(model) {
-  return /^gpt-image-2(?:$|[-_.:])/i.test(String(model || "").trim());
+  return isGptImage2OrNewerModel(model);
 }
 
 function getImageEditInputFidelityDebugMode(model, explicitFidelity = "") {
@@ -4001,26 +4054,26 @@ function buildResponsesImageEditPrompt(prompt, hasMask, options = {}) {
     return [
       String(prompt || "").trim(),
       "",
-      "按普通上传图片编辑，不按蒙版理解；白色背景只是截图底色。",
-      "Edit the provided image like a normal uploaded image in ChatGPT. It is NOT a mask; the white background is only screenshot background.",
+      "按普通上传图片编辑，不按蒙版理解；保持图片原有布局与透明通道。",
+      "Edit the provided image like a normal uploaded image in ChatGPT. It is NOT a mask; preserve the original composition and alpha transparency.",
       referenceSize,
       referenceCanvasSize,
       referenceCropBox,
       "The selected crop is a fixed Photoshop coordinate grid: keep the original crop edges, top-left origin, internal object positions, and scale locked to that grid.",
       "不要把结果整体上移、下移、左移或右移；选区边缘、按钮、图标、文字基线、纹理和未点名元素必须和原截图坐标对齐。",
-      "For UI/game screenshot edits, do not rebuild a new UI strip on a plain white canvas. Preserve the original background and unchanged UI layout at the same pixel positions, then apply only the named removal/change.",
+      "For UI/game screenshot edits, do not rebuild a new UI strip on an empty canvas. Preserve the original background and unchanged UI layout at the same pixel positions, then apply only the named removal/change.",
       "用户文字是唯一编辑规格：只处理被明确点名要改变或移除的区域；任何被说成不变、不要动、保持、保留的对象都是受保护参考。",
       "The user's text is the only edit specification: change or remove only the explicitly named target. Anything described as unchanged, do not touch, preserve, keep, or stay the same is protected reference content.",
-      "The uploaded image is the selected Photoshop crop itself on a white matte. Treat the crop edges as the exact composition boundary.",
-      "If a legacy upload includes white padding around the crop, use that padding only as context; do not move, zoom, recenter, shrink, or redesign the selected subject.",
-      "Return either the same uploaded white reference canvas aligned to the input, or only the selected Photoshop crop. Do not invent an unrelated square canvas or add a new white border.",
+      "The uploaded image is the selected Photoshop crop with its original layout and alpha transparency. Treat the crop edges as the exact composition boundary.",
+      "If the upload includes padding around the crop, use that padding only as context; do not move, zoom, recenter, shrink, or redesign the selected subject.",
+      "Return either the same uploaded reference canvas aligned to the input, or only the selected Photoshop crop. Do not invent an unrelated square canvas. Preserve alpha transparency where the original is transparent.",
       "只做用户要求的局部修改；没有被点名要改的可见线条、颜色、轮廓、材质和位置都必须保持原样。",
       "Do not redraw visible protected pixels. Keep unchanged lines, colors, contours, texture, scale, and position exactly as the input shows them.",
       "Make only the requested local change. If the user says an object must stay unchanged, keep that object as the protected reference.",
       "如果要移除遮挡物，只补全遮挡物下面缺失的部分；不要重新设计、替换、重画或移动仍然可见的被保护物体。",
       "If removing an unwanted element that overlaps a protected object, remove only the unwanted element and reconstruct the protected object underneath without redesigning it.",
       ...getScreenshotReferenceEditGuidance(prompt),
-      "Preserve the screenshot framing, object scale, position, rotation, and white-background margins. Do not crop, zoom, resize, shrink, recenter, or rotate the subject.",
+      "Preserve the screenshot framing, object scale, position, rotation, and margins. Do not crop, zoom, resize, shrink, recenter, or rotate the subject.",
       "The protected object's visible footprint and bounding box inside the selected crop must stay the same size as the input; do not make it occupy less of the crop.",
       "保持输出和上传截图或原选区对齐；不要把长方形参考图变成无关方图。",
       "Do not add unrelated decorations, frames, ribbons, boxes, labels, text, UI elements, or new objects.",
@@ -4182,7 +4235,7 @@ function getResponsesOutputItems(json) {
 
 function normalizeResponsesImageQuality(quality) {
   const value = String(quality || "").toLowerCase();
-  if (["auto", "low", "medium", "high"].includes(value)) return value;
+  if (["auto", "low", "medium", "high", "xhigh", "max"].includes(value)) return value;
   return "auto";
 }
 
@@ -7750,12 +7803,9 @@ async function createInpaintInputs(selection, docSize, model) {
 
 async function createInpaintScreenshotInputs(selection, docSize, model) {
   const targetRect = clampRectToDocument(cloneRect(selection), docSize);
-  setStatus(`正在导出白底截图参考图：${targetRect.width}x${targetRect.height}`);
-  const mattedImage = await matteTransparentPngBase64(
-    await exportDocumentRegionAsBase64(targetRect, null),
-    { r: 255, g: 255, b: 255 }
-  );
-  const paddedReference = await createPaddedScreenshotReferenceBase64(mattedImage);
+  setStatus(`正在导出截图参考图：${targetRect.width}x${targetRect.height}`);
+  const exportedImage = await exportDocumentRegionAsBase64(targetRect, null);
+  const paddedReference = await createPaddedScreenshotReferenceBase64(exportedImage);
   if (paddedReference.scale > 1) {
     setStatus(`选区较小，已将上传参考图等比放大到 ${paddedReference.crop.width}x${paddedReference.crop.height}；结果仍按原选区 ${targetRect.width}x${targetRect.height} 放回`);
   }
@@ -7767,7 +7817,8 @@ async function createInpaintScreenshotInputs(selection, docSize, model) {
     hasMask: false,
     screenshotReferenceEdit: true,
     uploadIsNormalImage: true,
-    whiteMatted: true,
+    whiteMatted: false,
+    preserveAlpha: true,
     imageBytes: estimateBase64Bytes(image),
     imageFormat: inferImageFormatFromValue(image) || "png",
     maskBytes: 0,
@@ -7873,10 +7924,9 @@ async function normalizeScreenshotReferenceResultBase64(b64, referenceCrop, opti
   const resized = sizeMismatch
     ? resizeRgbaNearest(decoded.rgba, decoded.width, decoded.height, targetWidth, targetHeight)
     : new Uint8Array(decoded.rgba);
-  const matted = matteRgbaToWhiteOpaque(resized);
   return {
-    b64: bytesToBase64(encodePngRgba(targetWidth, targetHeight, matted)),
-    normalized: sizeMismatch || matted !== resized,
+    b64: bytesToBase64(encodePngRgba(targetWidth, targetHeight, resized)),
+    normalized: sizeMismatch,
   };
 }
 
@@ -8010,12 +8060,7 @@ async function createPaddedScreenshotReferenceBase64(b64) {
   }
 
   const output = new Uint8Array(canvas.width * canvas.height * 4);
-  for (let index = 0; index < output.length; index += 4) {
-    output[index] = 255;
-    output[index + 1] = 255;
-    output[index + 2] = 255;
-    output[index + 3] = 255;
-  }
+  // Transparent padding: output buffer is zero-filled by default (RGBA 0,0,0,0)
   blitRgba(sourceRgba, canvas.width, canvas.height, output, canvas.width, canvas.height, left, top);
   return {
     b64: bytesToBase64(encodePngRgba(canvas.width, canvas.height, output)),
@@ -8833,10 +8878,7 @@ async function createReferenceRegionInputs(selection, docSize, model) {
   const targetRect = clampRectToDocument(cloneRect(selection), docSize);
   const placementRect = cloneRect(targetRect);
   const apiSize = getImageEditSizeForSelection(placementRect.width, placementRect.height, model);
-  const image = await matteTransparentPngBase64(
-    await exportDocumentRegionAsBase64(placementRect, null),
-    { r: 255, g: 255, b: 255 }
-  );
+  const image = await exportDocumentRegionAsBase64(placementRect, null);
   await saveDebugBase64Image("openai-last-reference-region.png", image);
 
   return {
@@ -9135,7 +9177,7 @@ function getImageEditSizeForSelection(width, height, model) {
 }
 
 function supportsFlexibleImageSize(model) {
-  return /gpt-image-2/i.test(String(model || "")) || isComfyModel(model);
+  return isGptImage2OrNewerModel(model) || isComfyModel(model);
 }
 
 function nearestStandardImageSize(width, height) {

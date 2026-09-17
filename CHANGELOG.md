@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.311] - 2026-09-18
+
+### Added
+
+- Added first-class support for OpenAI's GPT Image 2.5 family:
+  - `gpt-image-2.5-flare` (快速 / Fast everyday creative generation)
+  - `gpt-image-2.5-sunburst` (深度 / Deep precision for editing, repaint, and layer split)
+  - `gpt-image-2.5` (标准通用入口 / Default route)
+- Added an interactive model tier segmented switcher (⚡ 快速 Flare / 🎯 深度 Sunburst) directly on the main parameter panel for fast one-click toggling during design sessions.
+- Added `xhigh` (极高) and `max` (最高) quality options for GPT Image 2.5 in the quality selector and normalization helpers.
+- Added transparent background toggle (`transparentBgInput`), allowing direct output of native PNG layers with alpha transparency.
+
+### Changed
+
+- Removed legacy intentional white-matte (`#FFFFFF`) compositing workarounds now that GPT Image 2.5 natively supports transparent channel PNGs:
+  - Document region exports for selection repaint (`createInpaintScreenshotInputs`) and reference edits (`createReferenceRegionInputs`) no longer force alpha pixels to opaque white.
+  - Small selection padding (`createPaddedScreenshotReferenceBase64`) now uses clean transparent padding `RGBA(0, 0, 0, 0)` instead of solid white margins.
+  - Model result normalization (`normalizeScreenshotReferenceResultBase64`) no longer flattens transparent pixels with `matteRgbaToWhiteOpaque`, preserving the model's true alpha channels into Photoshop.
+  - Updated prompt guidelines to remove obsolete legacy explanations about "white background is only screenshot background".
+- Semantic split mode now routes to `gpt-image-2.5-sunburst` by default with native transparent PNG output (`background: "transparent"`), eliminating edge artifacts from white-matte color removal.
+- Added `gpt-6-astra` to the `/responses` main controller fallback candidate pool.
+
 ## [0.1.310] - 2026-08-22
 
 ### Fixed

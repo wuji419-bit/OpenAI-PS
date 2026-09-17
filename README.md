@@ -1,6 +1,6 @@
 # OpenAI Photoshop Generator
 
-Current version: **v0.1.310**
+Current version: **v0.1.311**
 
 ![OpenAI Photoshop Generator running inside Adobe Photoshop](stitch-reference/photoshop-panel-v0163.png)
 
@@ -31,7 +31,7 @@ The default official OpenAI configuration is:
 Base URL: https://api.openai.com/v1
 Image generation: /images/generations
 Image edits: /images/edits
-Model: gpt-image-2
+Model: gpt-image-2.5-flare (Fast) / gpt-image-2.5-sunburst (Deep) / gpt-image-2 (legacy)
 ```
 
 The plugin also supports local relay services that expose compatible image endpoints, for example:

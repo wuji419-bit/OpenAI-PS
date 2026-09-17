@@ -9,7 +9,7 @@ The maintained plugin flow is implemented in `src/app.js`.
 - `inpaint` - export the selected rectangular region, generate a matching mask, and call the edit endpoint.
 - `outpaint` - create an expanded canvas input and mask, call the edit endpoint, expand the Photoshop canvas, and place the returned full-canvas layer back at 1:1 scale.
 - `cutout` - export the current document or selection and call Koukoutu's synchronous background-removal endpoint with `crop=0`.
-- `split` - export the full canvas, resolve automatic or user-specified semantic targets, and ask `gpt-image-2` to extract each full-canvas transparent layer.
+- `split` - export the full canvas, resolve automatic or user-specified semantic targets, and ask `gpt-image-2.5-sunburst` to extract each full-canvas transparent layer.
 
 ## Endpoints
 

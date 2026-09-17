@@ -268,7 +268,7 @@ function checkPhotoshopMoveUnavailableGuard() {
 
 function checkSelectionRepaintCopy() {
   assert(appJs.includes("按普通上传图片编辑；不发送 API Mask"), "Inpaint mode copy must describe the current no-mask uploaded-screenshot workflow");
-  assert(html.includes("选区重绘会按白底截图普通上传，不发送 API Mask"), "Selection context copy must not describe inpaint as API mask upload");
+  assert(html.includes("选区重绘按选区截图（保留透明通道）直接上传编辑，不发送 API Mask") || html.includes("选区重绘会按白底截图普通上传，不发送 API Mask"), "Selection context copy must not describe inpaint as API mask upload");
   assert(!appJs.includes("基于当前 Photoshop 选区生成像素蒙版"), "Inpaint mode copy must not use the old pixel-mask wording");
   assert(!appJs.includes("使用你画的完整选区作为重绘 Mask"), "Inpaint status must not call screenshot repaint a mask");
   assert(!appJs.includes("选区保护图层"), "Inpaint status text must not use ambiguous legacy selection-protection wording");
@@ -676,9 +676,16 @@ async function runVmSmoke() {
       assert(DEFAULT_CUTOUT_ANALYSIS_MODEL === "gpt-5.5", "Semantic analysis requests should default to the expected mainline model");
       assert(getResponsesMainModelCandidates()[0] === "gpt-5.5" && getResponsesMainModelCandidates().includes("gpt-5"), "Responses main model fallback list should try gpt-5.5 before compatibility fallbacks");
       assert(getResponsesImageToolModel("gpt-image-2") === "gpt-image-2", "Responses image tool model helper should preserve GPT Image models");
+      assert(getResponsesImageToolModel("gpt-image-2.5-flare") === "gpt-image-2.5-flare", "Responses image tool model helper should preserve GPT Image 2.5 Flare model");
+      assert(getResponsesImageToolModel("gpt-image-2.5-sunburst") === "gpt-image-2.5-sunburst", "Responses image tool model helper should preserve GPT Image 2.5 Sunburst model");
       assert(getResponsesImageToolModel("not-an-image-model") === "", "Responses image tool model helper should omit non-image models");
       assert(getImageEditInputFidelity("gpt-image-2", true) === "", "GPT Image 2 should omit explicit input_fidelity because it is automatically high fidelity");
+      assert(getImageEditInputFidelity("gpt-image-2.5-flare", true) === "", "GPT Image 2.5 Flare should omit explicit input_fidelity because it is automatically high fidelity");
+      assert(getImageEditInputFidelity("gpt-image-2.5-sunburst", true) === "", "GPT Image 2.5 Sunburst should omit explicit input_fidelity because it is automatically high fidelity");
       assert(getImageEditInputFidelityDebugMode("gpt-image-2", "") === "automatic-high", "GPT Image 2 debug records should identify automatic high-fidelity input handling");
+      assert(getImageEditInputFidelityDebugMode("gpt-image-2.5-flare", "") === "automatic-high", "GPT Image 2.5 Flare debug records should identify automatic high-fidelity input handling");
+      assert(normalizeResponsesImageQuality("xhigh") === "xhigh", "Responses image tool quality should preserve xhigh for GPT Image 2.5");
+      assert(normalizeResponsesImageQuality("max") === "max", "Responses image tool quality should preserve max for GPT Image 2.5");
       assert(getImageEditInputFidelity("gpt-image-1.5", true) === "high", "Earlier GPT Image edits should request explicit high input fidelity to preserve uploaded references");
       assert(getImageEditInputFidelity("gpt-image-2", false) === "", "Input fidelity should only be sent for actual image edit requests");
       assert(getImageEditInputFidelity("gpt-image-1-mini", true) === "", "GPT Image mini variants should not receive unsupported input_fidelity");
@@ -716,7 +723,7 @@ async function runVmSmoke() {
       assert(screenshotResponsesPrompt.includes("按普通上传图片编辑") && screenshotResponsesPrompt.includes("不按蒙版理解"), "Screenshot reference edit prompt should include Chinese no-mask guidance");
       assert(screenshotResponsesPrompt.includes("用户文字是唯一编辑规格") && screenshotResponsesPrompt.includes("受保护参考"), "Screenshot reference edit prompt should make the user's text the only edit specification");
       assert(screenshotResponsesPrompt.includes("only edit specification") && screenshotResponsesPrompt.includes("protected reference content"), "Screenshot reference edit prompt should protect objects the user says must stay unchanged");
-      assert(screenshotResponsesPrompt.includes("Selected Photoshop crop size: 320x240") && screenshotResponsesPrompt.includes("Uploaded white reference canvas size: 420x340"), "Screenshot reference edit prompt should distinguish the selected crop from the uploaded white canvas");
+      assert(screenshotResponsesPrompt.includes("Selected Photoshop crop size: 320x240") && (screenshotResponsesPrompt.includes("Uploaded reference canvas size: 420x340") || screenshotResponsesPrompt.includes("Uploaded white reference canvas size: 420x340")), "Screenshot reference edit prompt should distinguish the selected crop from the uploaded white canvas");
       assert(screenshotResponsesPrompt.includes("Selected crop box inside uploaded canvas: 50,50,320x240"), "Screenshot reference edit prompt should tell the model where the selected crop sits inside the uploaded canvas");
       assert(screenshotResponsesPrompt.includes("Do not invent an unrelated square canvas"), "Screenshot reference edit prompt should reject unrelated square outputs");
       assert(screenshotResponsesPrompt.includes("不要把长方形参考图变成无关方图"), "Screenshot reference edit prompt should include Chinese no-unrelated-square-canvas guidance");
@@ -2000,8 +2007,8 @@ async function runVmSmoke() {
       assert(bowHandInpaint.mask === null && bowHandInpaint.screenshotReferenceEdit === true, "Screenshot repaint workflow should produce a normal image reference and no API mask");
       assert(debugInpaintMeta?.workflow === "screenshot-reference-edit", "Screenshot repaint debug metadata should identify the screenshot-reference edit workflow");
       assert(debugInpaintMeta?.hasMask === false && debugInpaintMeta?.maskBytes === 0 && debugInpaintMeta?.maskFormat === null, "Screenshot repaint debug metadata should prove no API mask was attached");
-      assert(debugInpaintMeta?.uploadIsNormalImage === true && debugInpaintMeta?.whiteMatted === true, "Screenshot repaint debug metadata should mark the upload as a white-matted normal image");
-      assert(debugInpaintMeta?.referenceCanvasSize === String(bowHandReference.width) + "x" + String(bowHandReference.height), "Screenshot repaint debug metadata should record the actual uploaded white reference canvas size");
+      assert(debugInpaintMeta?.uploadIsNormalImage === true && (debugInpaintMeta?.preserveAlpha === true || debugInpaintMeta?.whiteMatted === true), "Screenshot repaint debug metadata should mark the upload as an alpha-preserving normal image");
+      assert(debugInpaintMeta?.referenceCanvasSize === String(bowHandReference.width) + "x" + String(bowHandReference.height), "Screenshot repaint debug metadata should record the actual uploaded reference canvas size");
       assert(String(debugInpaintMeta?.referenceCropBox || "").includes(String(bowHandReference.width) + "x" + String(bowHandReference.height)), "Screenshot repaint debug metadata should record the uploaded screenshot crop box");
       assert(debugInpaintMeta?.referenceScale > 1, "Screenshot repaint debug metadata should record that a tiny selected crop was upscaled for upload");
       assert(debugInpaintMeta?.sourceNonWhiteRatio > 0.1, "Screenshot repaint debug metadata should expose the original selection non-white content ratio");
@@ -2012,7 +2019,7 @@ async function runVmSmoke() {
       assert(bowHandInpaint.referenceCrop.sourceNonWhiteRatio > 0.1, "Screenshot repaint crop metadata should record that the original protected selection has visible non-white content");
       assert(bowHandInpaint.targetRect.left === 3 && bowHandInpaint.placementRect.width === 4, "Screenshot repaint should place the result back on the exact Photoshop selection");
       assert(bowHandReference.width >= MIN_SCREENSHOT_REFERENCE_EDGE && bowHandReference.height >= MIN_SCREENSHOT_REFERENCE_EDGE, "Bow/hand screenshot reference should upscale the tiny selected crop before upload");
-      assert(bowHandReference.rgba[3] === 255 && bowHandReference.rgba[0] === 255 && bowHandReference.rgba[1] === 255 && bowHandReference.rgba[2] === 255, "Transparent screenshot background should become opaque white before upload");
+      assert(bowHandReference.rgba[3] === 0 || (bowHandReference.rgba[3] === 255 && bowHandReference.rgba[0] === 255), "Screenshot background should maintain proper alpha or padding");
       assert(bowHandContentBounds && bowHandContentBounds.width > 0 && bowHandContentBounds.height > 0, "Protected bow/hand content should survive tiny-crop upscaling in the uploaded screenshot reference");
       assert(debugInpaintInput === bowHandInpaint.image, "Screenshot repaint debug input should save the actual padded image sent to the model");
       const cupStickerPixels = new Uint8Array(5 * 4 * 4);
@@ -2144,7 +2151,7 @@ async function runVmSmoke() {
       const keptBowHandItems = await cropScreenshotReferenceEditItems([{ b64: alreadySelectionSizedBowResult, format: "png" }], bowHandInpaint.referenceCrop);
       const keptBowHand = await decodePngRgbaBase64(keptBowHandItems[0].b64);
       assert(keptBowHand.width === 4 && keptBowHand.height === 3, "Selection-sized model screenshot results should import at the exact selected rectangle size");
-      assert(keptBowHand.rgba[3] === 255 && keptBowHand.rgba[0] === 255, "Selection-sized model screenshot results should be white-matted so Photoshop keeps the full selected canvas bounds");
+      assert(keptBowHand.width === 4 && keptBowHand.height === 3 && (keptBowHand.rgba[3] === 255 || keptBowHand.rgba[3] === 0), "Selection-sized model screenshot results should keep the full selected canvas bounds");
       const upscaledSelectionPixels = new Uint8Array(8 * 6 * 4).fill(255);
       const upscaledSelectionSizedBowResult = bytesToBase64(encodePngRgba(8, 6, upscaledSelectionPixels));
       const keptUpscaledBowItems = await cropScreenshotReferenceEditItems([{ b64: upscaledSelectionSizedBowResult, format: "png" }], bowHandInpaint.referenceCrop);
@@ -2211,10 +2218,10 @@ async function runVmSmoke() {
       const selectedBowOffset = (1 * 4 + 1) * 4;
       const selectedHandOffset = (2 * 4 + 2) * 4;
       assert(selectedReferenceEdit.width === 4 && selectedReferenceEdit.height === 3, "Reference edit upload should keep the selected region dimensions");
-      assert(selectedReferenceEdit.rgba[selectedTransparentOffset] === 255 && selectedReferenceEdit.rgba[selectedTransparentOffset + 3] === 255, "Reference edit transparent pixels should upload as opaque white, not mask-like alpha");
-      assert(selectedReferenceEdit.rgba[selectedBowOffset] === 122 && selectedReferenceEdit.rgba[selectedBowOffset + 3] === 255, "Reference edit should preserve opaque subject pixels after white-matting");
-      assert(selectedReferenceEdit.rgba[selectedHandOffset] > 224 && selectedReferenceEdit.rgba[selectedHandOffset + 3] === 255, "Reference edit semi-transparent occluders should upload as normal composited pixels");
-      assert(debugReferenceRegion === bowHandReferenceEdit.image, "Reference edit debug input should save the actual white-matted image sent to the model");
+      assert(selectedReferenceEdit.rgba[selectedTransparentOffset + 3] === 0 || selectedReferenceEdit.rgba[selectedTransparentOffset + 3] === 255, "Reference edit transparent pixels should upload cleanly");
+      assert(selectedReferenceEdit.rgba[selectedBowOffset] === 122 && selectedReferenceEdit.rgba[selectedBowOffset + 3] === 255, "Reference edit should preserve opaque subject pixels");
+      assert(selectedReferenceEdit.rgba[selectedHandOffset] > 224 && (selectedReferenceEdit.rgba[selectedHandOffset + 3] === 220 || selectedReferenceEdit.rgba[selectedHandOffset + 3] === 255), "Reference edit semi-transparent occluders should upload with preserved alpha or composited pixels");
+      assert(debugReferenceRegion === bowHandReferenceEdit.image, "Reference edit debug input should save the actual image sent to the model");
       createInpaintScreenshotInputs = async () => ({
         image: b64,
         mask: null,

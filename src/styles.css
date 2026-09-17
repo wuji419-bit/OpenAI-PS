@@ -836,6 +836,60 @@ textarea:focus {
   background: var(--surface-panel);
 }
 
+
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.model-tier-row {
+  display: flex;
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.tier-segmented {
+  display: flex;
+  width: 100%;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-low);
+}
+
+.tier-segmented button {
+  position: relative;
+  flex: 1 1 0;
+  height: 26px;
+  margin: 0 1px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tier-segmented button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.tier-segmented button.is-active {
+  background: linear-gradient(180deg, var(--primary) 0%, var(--primary-deep) 100%);
+  color: #ffffff;
+  box-shadow: 0 1px 4px rgba(106, 141, 255, 0.35);
+}
+
 .checkbox-line input:checked {
   border-color: var(--primary);
   background-color: var(--primary);

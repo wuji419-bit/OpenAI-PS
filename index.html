@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenAI 图片</title>
-    <link rel="stylesheet" href="./src/styles.css?v=0.1.310" />
-    <script src="./src/app.js?v=0.1.310" defer></script>
+    <link rel="stylesheet" href="./src/styles.css?v=0.1.311" />
+    <script src="./src/app.js?v=0.1.311" defer></script>
   </head>
   <body>
     <main class="app-shell">
@@ -15,7 +15,7 @@
             <div class="title-inline">
               <span id="connectionBadge" class="connection-dot" aria-hidden="true" title="未配置 API Key"></span>
               <h1>OpenAI 图片</h1>
-              <span id="versionText" class="version-inline">v0.1.310</span>
+              <span id="versionText" class="version-inline">v0.1.311</span>
             </div>
             <button id="settingsToggleBtn" class="icon-button settings-entry-button" type="button" title="打开 API 设置" aria-label="打开 API 设置">
               设置
@@ -58,7 +58,7 @@
                   <path d="M8 8h8v8H8z" />
                 </svg>
                 <strong>使用当前矩形选区作为编辑范围</strong>
-                <span>选区重绘会按白底截图普通上传，不发送 API Mask；扩图才会基于当前画布生成编辑蒙版。</span>
+                <span>选区重绘按选区截图（保留透明通道）直接上传编辑，不发送 API Mask；扩图才会基于当前画布生成编辑蒙版。</span>
               </div>
             </div>
           </section>
@@ -112,6 +112,12 @@
           </section>
 
           <section class="section-block parameter-section">
+            <div class="model-tier-row">
+              <div class="tier-segmented" id="modelTierSegment" role="radiogroup" aria-label="模型版本">
+                <button type="button" class="is-active" data-tier="gpt-image-2.5-flare" title="快速 (Flare)：极速生图、日常高频">⚡ 快速 (Flare)</button>
+                <button type="button" data-tier="gpt-image-2.5-sunburst" title="深度 (Sunburst)：精准重绘、细节保真">🎯 深度 (Sunburst)</button>
+              </div>
+            </div>
             <div class="parameter-grid">
               <label id="sizeField" class="form-field">
                 <span class="form-label">尺寸</span>
@@ -135,6 +141,8 @@
                     <option value="low">低</option>
                     <option value="medium">中</option>
                     <option value="high">高</option>
+                    <option value="xhigh">极高 (xhigh)</option>
+                    <option value="max">最高 (max)</option>
                   </select>
                 </div>
               </label>
@@ -146,10 +154,16 @@
                 <option value="png">PNG</option>
               </select>
             </div>
-            <label id="fitSelectionRow" class="checkbox-line" for="fitSelectionInput">
-              <input id="fitSelectionInput" type="checkbox" checked />
-              <span>贴合当前选区</span>
-            </label>
+            <div class="checkbox-row">
+              <label id="fitSelectionRow" class="checkbox-line" for="fitSelectionInput">
+                <input id="fitSelectionInput" type="checkbox" checked />
+                <span>贴合当前选区</span>
+              </label>
+              <label id="transparentBgRow" class="checkbox-line" for="transparentBgInput">
+                <input id="transparentBgInput" type="checkbox" />
+                <span>透明背景</span>
+              </label>
+            </div>
           </section>
 
           <section id="outpaintControls" class="section-block outpaint-panel hidden">
@@ -222,7 +236,7 @@
       <section id="settingsView" class="settings-view hidden">
         <header class="settings-header">
           <button id="settingsBackBtn" class="icon-button back-button" type="button" title="返回" aria-label="返回"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5" /></svg></button>
-          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.310</span></div>
+          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.311</span></div>
         </header>
         <div class="settings-scroll">
           <section class="settings-group">
@@ -232,9 +246,12 @@
             <label class="form-field"><span class="field-label">Auth / API JSON</span><textarea id="authJsonInput" class="settings-textarea" placeholder="粘贴 OpenAI API Key，或包含 api_key / OPENAI_API_KEY 的 JSON"></textarea></label>
             <p class="settings-help">支持官方 API Key 直连；不使用 id_token / refresh_token 账号登录态。</p>
             <button id="applyAuthJsonBtn" class="secondary-button" type="button">导入并直连 OpenAI</button>
-            <label class="form-field"><span class="field-label">Model ID</span><input id="modelInput" type="text" value="gpt-image-2" list="modelPresetList" /></label>
+            <label class="form-field"><span class="field-label">Model ID</span><input id="modelInput" type="text" value="gpt-image-2.5-flare" list="modelPresetList" /></label>
             <datalist id="modelPresetList">
-              <option value="gpt-image-2"></option>
+              <option value="gpt-image-2.5-flare">快速 (Flare) - 日常高频生成</option>
+              <option value="gpt-image-2.5-sunburst">深度 (Sunburst) - 精准编辑与拆图</option>
+              <option value="gpt-image-2.5">通用 (Image 2.5)</option>
+              <option value="gpt-image-2">上一代 (Image 2)</option>
             </datalist>
             <label class="form-field"><span class="field-label">ComfyUI URL</span><input id="comfyUrlInput" type="text" value="http://192.168.1.128:8188" /></label>
           </section>
