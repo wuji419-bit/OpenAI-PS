@@ -62,7 +62,7 @@ function checkRuntimeCopiesSynced() {
 
   for (const copyDir of copyDirs) {
     if (!isPluginDir(copyDir) || path.resolve(copyDir) === rootDir) continue;
-    for (const file of ["manifest.json", "index.html", "CHANGELOG.md", "README_CN.md", "src/app.js", "src/styles.css", "scripts/smoke-plugin.js", "scripts/audit-plugin-state.js", "scripts/reload-photoshop-plugin.js", "scripts/restart-photoshop-and-smoke.js", "scripts/run-photoshop-smoke.js", "scripts/sync-runtime-copies.js"]) {
+    for (const file of ["manifest.json", "index.html", "CHANGELOG.md", "README_CN.md", "README.md", "package.json", "docs/openai-image-flow.md", "src/app.js", "src/styles.css", "scripts/smoke-plugin.js", "scripts/test-native-transparency.js", "scripts/audit-plugin-state.js", "scripts/reload-photoshop-plugin.js", "scripts/restart-photoshop-and-smoke.js", "scripts/run-photoshop-smoke.js", "scripts/sync-runtime-copies.js"]) {
       const sourceText = fs.readFileSync(path.join(rootDir, file), "utf8");
       const copyPath = path.join(copyDir, file);
       assert(fs.existsSync(copyPath), `Missing runtime copy file: ${copyPath}`);
@@ -229,6 +229,7 @@ function checkRuntimeReloadScript() {
   assert(photoshopSmokeScript.includes("runtimePluginVersion="), "Photoshop smoke matrix should include the evaluated runtime PLUGIN_VERSION");
   assert(photoshopSmokeScript.includes("panelVersion="), "Photoshop smoke matrix should include the visible panel version label");
   assert(photoshopSmokeScript.includes("directSelectionPatch=ok"), "Photoshop smoke matrix should verify direct selection repaint placement");
+  assert(photoshopSmokeScript.includes("nativeAlphaReplacement=ok"), "Real Photoshop smoke must compare composite Alpha with the returned patch");
   assert(photoshopSmokeScript.includes("directSelectionBounds=ok"), "Photoshop smoke matrix should verify direct selection repaint real layer bounds");
   assert(photoshopSmokeScript.includes("outpaintCanvasExpand=ok"), "Photoshop smoke matrix should verify outpaint canvas expansion");
   assert(photoshopSmokeScript.includes("PHOTOSHOP_SMOKE_OK"), "Photoshop smoke script must report a clear pass marker");
@@ -236,7 +237,6 @@ function checkRuntimeReloadScript() {
   assert(appJs.includes("directSelectionPatch="), "Runtime offline diagnostics should log direct selection repaint placement coverage");
   assert(appJs.includes("directSelectionBounds="), "Runtime offline diagnostics should log direct selection repaint real layer bounds");
   assert(appJs.includes("outpaintCanvasExpand="), "Runtime offline diagnostics should log outpaint canvas expansion coverage");
-  assert(appJs.includes("cutoutOriginalSize="), "Runtime offline diagnostics should log cutout original-size preservation coverage");
   assert(appJs.includes("splitFullCanvas="), "Runtime offline diagnostics should log semantic split full-canvas coverage");
   assert(!appJs.includes("拆图现在会用抠抠图做透明抠像"), "Split mode should not require a Koukoutu key");
   assert(appJs.includes("whiteMatteLayer: true"), "Split mode should retain the opaque white fallback marker");
@@ -256,9 +256,6 @@ function checkRuntimeReloadScript() {
   assert(appJs.includes("image_url: toDataUrl(imageB64, imageFormat)"), "Responses edit input image should use inferred image MIME instead of forcing PNG");
   assert(!appJs.includes("image_url: `data:image/png;base64,${stripDataUrl(imageB64)}`"), "Responses edit input image must not force PNG data URLs");
   assert(appJs.includes("base64ToBlob(imageB64, mimeTypeForFormat(imageFormat))"), "/images/edits upload should use inferred image MIME instead of forcing PNG");
-  assert(appJs.includes("base64ToBlob(imageB64, mimeTypeForFormat(inputFormat))"), "Koukoutu upload should use inferred image MIME instead of forcing PNG");
-  assert(appJs.includes("base64ToBlob(b64, mimeTypeForFormat(imageFormat))"), "ComfyUI upload should use inferred image MIME instead of forcing PNG");
-  assert(appJs.includes("withImageFileExtension(fileName, imageFormat)"), "ComfyUI upload filename should match inferred image format");
 }
 
 function checkPhotoshopMoveUnavailableGuard() {
@@ -507,9 +504,7 @@ async function runVmSmoke() {
 
       for (const id of [
         "baseUrlInput", "apiKeyInput", "modelInput", "generationPathInput", "editPathInput",
-        "sizeInput", "countInput", "formatInput", "qualityInput", "koukoutuApiKeyInput",
-        "koukoutuFormatInput", "koukoutuBorderInput", "promptInput", "negativePromptInput",
-        "comfyUrlInput"
+        "sizeInput", "countInput", "formatInput", "qualityInput", "promptInput", "negativePromptInput"
       ]) {
         $(id).value = "";
       }
@@ -521,9 +516,6 @@ async function runVmSmoke() {
       $("editPathInput").value = "/images/edits";
       $("sizeInput").value = "auto";
       $("countInput").value = "1";
-      $("koukoutuApiKeyInput").value = "kou-test";
-      $("koukoutuFormatInput").value = "png";
-      $("koukoutuBorderInput").value = "0";
 
       state.mode = "reference";
       updateModeUI();
@@ -573,7 +565,7 @@ async function runVmSmoke() {
           placedSize?.width || null,
           placedSize?.height || null,
           Boolean(item.normalizedPlacementSize),
-          Boolean(opts.forceFullImageRect),
+          Boolean(opts.pixelExactSelectionPatch),
         ]);
       };
       expandCanvasForOutpaint = async (padding, rect) => calls.push(["expand", padding && padding.left, rect && rect.width]);
@@ -619,12 +611,6 @@ async function runVmSmoke() {
         targetRect: { left: 0, top: 0, right: 120, bottom: 100, width: 120, height: 100 },
         placementRect: { left: 0, top: 0, right: 120, bottom: 100, width: 120, height: 100 },
       });
-      createCutoutInputs = async () => ({
-        image: createOfflineDiagnosticPngBase64(40, 30, "cutout-input"),
-        displaySize: "40x30",
-        targetRect: { left: 10, top: 12, right: 50, bottom: 42, width: 40, height: 30 },
-        placementRect: { left: 10, top: 12, right: 50, bottom: 42, width: 40, height: 30 },
-      });
       resolveSemanticInpaintSelection = async (settings, prompt, selection) => selection;
       resolveSemanticSplitTargets = async () => [{ label: "角色", target: "角色" }];
       compositeItemsWithOriginalMask = async (items) => items;
@@ -641,14 +627,6 @@ async function runVmSmoke() {
           return [{ b64: createOfflineDiagnosticPngBase64(40, 30, "inpaint-screenshot-smoke"), format: "png" }];
         }
         return [{ b64, format: "png" }];
-      };
-      const realRequestKoukoutuCutout = requestKoukoutuCutout;
-      requestKoukoutuCutout = async (settings, imageB64) => {
-        const inputSize = getPngDimensionsFromBase64(imageB64) || { width: 0, height: 0 };
-        const outputB64 = createOfflineDiagnosticPngBase64(inputSize.width || 40, inputSize.height || 30, "cutout-smoke");
-        const outputSize = getPngDimensionsFromBase64(outputB64) || { width: 0, height: 0 };
-        calls.push(["cutout", inputSize.width, inputSize.height, outputSize.width, outputSize.height]);
-        return { b64: outputB64, format: "png" };
       };
       requestSemanticSplitLayers = async (settings, imageB64, docSize) => {
         const width = Math.round(docSize?.width || 100);
@@ -1201,67 +1179,6 @@ async function runVmSmoke() {
       state.unsupportedResponsesEditEndpoints.add(getResponsesEditEndpointKey(getSettings()));
       assert(shouldUseChatGptStyleResponsesEdit(getSettings(), false, { screenshotReferenceEdit: true }), "Selection screenshot repaint must bypass stale unsupported /responses cache");
       state.unsupportedResponsesEditEndpoints.clear();
-      let capturedKoukoutuUrl = "";
-      let capturedKoukoutuForm = null;
-      let capturedKoukoutuDebug = null;
-      const savedDebugBase64Image = saveDebugBase64Image;
-      const savedDebugJsonFileForKoukoutu = saveDebugJsonFile;
-      saveDebugBase64Image = async () => {};
-      saveDebugJsonFile = async (name, data) => {
-        if (name === "cutout-last-koukoutu-request.json") capturedKoukoutuDebug = data;
-      };
-      sendRequest = async (url, requestOptions) => {
-        capturedKoukoutuUrl = url;
-        capturedKoukoutuForm = requestOptions.body;
-        return {
-          ok: true,
-          status: 200,
-          statusText: "OK",
-          arrayBuffer: async () => base64ToArrayBuffer(b64),
-        };
-      };
-      const koukoutuResult = await realRequestKoukoutuCutout({
-        ...getSettings(),
-        koukoutuFormat: "webp",
-        koukoutuBorder: 3,
-      }, b64);
-      sendRequest = savedSendRequest;
-      saveDebugBase64Image = savedDebugBase64Image;
-      saveDebugJsonFile = savedDebugJsonFileForKoukoutu;
-      const koukoutuEntries = {};
-      for (const [key, value] of capturedKoukoutuForm.entries()) {
-        koukoutuEntries[key] = typeof value === "string" ? value : (value?.name || "[blob]");
-      }
-      assert(capturedKoukoutuUrl === KOUKOUTU_SYNC_URL, "Koukoutu cutout should call the sync background-removal endpoint");
-      assert(koukoutuEntries.model_key === "background-removal", "Koukoutu cutout should request background removal");
-      assert(koukoutuEntries.crop === "0" && koukoutuEntries.stamp_crop === "0", "Koukoutu cutout must keep original image dimensions for Photoshop placement");
-      assert(koukoutuEntries.response === "bytes", "Koukoutu cutout should request raw bytes for direct PNG import");
-      assert(koukoutuEntries.output_format === "webp" && koukoutuEntries.border === "3", "Koukoutu cutout should preserve configured output format and border");
-      assert(capturedKoukoutuDebug?.route === "koukoutu-cutout" && capturedKoukoutuDebug?.endpointUrl === KOUKOUTU_SYNC_URL, "Koukoutu debug request should record the sanitized cutout route");
-      assert(capturedKoukoutuDebug?.crop === 0 && capturedKoukoutuDebug?.stampCrop === 0, "Koukoutu debug request should prove cropped API output is disabled");
-      assert(capturedKoukoutuDebug?.response === "bytes" && capturedKoukoutuDebug?.outputFormat === "webp", "Koukoutu debug request should expose raw byte response mode and output format");
-      assert(capturedKoukoutuDebug?.inputBytes > 0 && capturedKoukoutuDebug?.inputFormat === "png", "Koukoutu debug request should expose input byte count and inferred input format");
-      assert(!JSON.stringify(capturedKoukoutuDebug).includes("kou-test"), "Koukoutu debug request must not persist API keys");
-      assert(!JSON.stringify(capturedKoukoutuDebug).includes(stripDataUrl(b64).slice(0, 24)), "Koukoutu debug request must not include image base64 bytes");
-      assert(koukoutuResult.b64 === b64 && koukoutuResult.importB64 === b64, "Koukoutu cutout should return the same full-size bytes for preview and import");
-      assert(koukoutuResult.format === "png", "Koukoutu cutout should record the actual returned byte format instead of stale requested metadata");
-      const smallCutoutPixels = new Uint8Array(2 * 2 * 4).fill(255);
-      const normalizedCutout = await normalizeCutoutResultItem({
-        b64: bytesToBase64(encodePngRgba(2, 2, smallCutoutPixels)),
-        format: "png",
-      }, { placementRect: { width: 4, height: 4 } });
-      const normalizedCutoutDecoded = await decodePngRgbaBase64(normalizedCutout.b64);
-      assert(normalizedCutoutDecoded.width === 4 && normalizedCutoutDecoded.height === 4, "Koukoutu cutout results should be resized to the captured Photoshop region when aspect ratio matches");
-      let rejectedCutoutMismatch = false;
-      try {
-        await normalizeCutoutResultItem({
-          b64: bytesToBase64(encodePngRgba(2, 3, new Uint8Array(2 * 3 * 4).fill(255))),
-          format: "png",
-        }, { placementRect: { width: 4, height: 4 } });
-      } catch (error) {
-        rejectedCutoutMismatch = /比例不一致/.test(String(error?.message || error));
-      }
-      assert(rejectedCutoutMismatch, "Koukoutu cutout results should fail safely when cropped dimensions cannot map back to the captured region");
       let rejectedBadImport = false;
       try {
         await resultToArrayBuffer({ importB64: Promise.resolve(b64), b64 }, true);
@@ -1678,12 +1595,6 @@ async function runVmSmoke() {
       );
       assert(fullCanvasInpaintRect.left === 0 && fullCanvasInpaintRect.top === 0, "GPT image inpaint should use full-canvas context");
       assert(fullCanvasInpaintRect.width === 1000 && fullCanvasInpaintRect.height === 800, "Full-canvas inpaint context should keep document bounds");
-      const comfyInpaintRect = getInpaintPlacementRect(
-        { left: 220, top: 180, right: 280, bottom: 240, width: 60, height: 60 },
-        { width: 1000, height: 800 },
-        "comfy:basic-inpaint"
-      );
-      assert(comfyInpaintRect.width < 1000 && comfyInpaintRect.height < 800, "Comfy inpaint should keep bounded context");
       const fullCanvasMask = await createRectMaskBase64(1766, 1254, { left: 732, top: 555, right: 810, bottom: 652, width: 78, height: 97 });
       const fullCanvasMaskSize = getPngDimensionsFromBase64(fullCanvasMask);
       assert(fullCanvasMaskSize.width === 1766 && fullCanvasMaskSize.height === 1254, "Full-canvas mask should keep document dimensions");
@@ -1804,28 +1715,6 @@ async function runVmSmoke() {
       assert(lockedSplitDecoded.rgba[0] === 255 && lockedSplitDecoded.rgba[1] === 255 && lockedSplitDecoded.rgba[2] === 255 && lockedSplitDecoded.rgba[3] === 255, "Coordinate locking should keep the rest of the full canvas opaque white");
       const lockedTargetOffset = (1 * 20 + 2) * 4;
       assert(lockedSplitDecoded.rgba[lockedTargetOffset] === 120 && lockedSplitDecoded.rgba[lockedTargetOffset + 1] === 70, "Coordinate locking should move the isolated redraw into the detected original bbox");
-      const savedKoukoutuForSplit = requestKoukoutuCutout;
-      let splitKoukoutuCalled = 0;
-      requestKoukoutuCutout = async (settings, imageB64) => {
-        splitKoukoutuCalled += 1;
-        const decoded = await decodePngRgbaBase64(imageB64);
-        const cutoutPixels = new Uint8Array(decoded.rgba);
-        for (let i = 0; i < cutoutPixels.length; i += 4) {
-          const white = cutoutPixels[i] > 245 && cutoutPixels[i + 1] > 245 && cutoutPixels[i + 2] > 245;
-          cutoutPixels[i + 3] = white ? 0 : 255;
-        }
-        return {
-          b64: bytesToBase64(encodePngRgba(decoded.width, decoded.height, cutoutPixels)),
-          format: "png",
-        };
-      };
-      const koukoutuSplitLayer = await normalizeSemanticSplitLayerItem({
-        b64: bytesToBase64(encodePngRgba(20, 20, splitPixels)),
-        format: "png",
-      }, { width: 20, height: 20 }, "抠抠图弓身", 5, { koukoutuApiKey: "test-key", koukoutuFormat: "png" });
-      requestKoukoutuCutout = savedKoukoutuForSplit;
-      assert(splitKoukoutuCalled === 0 && koukoutuSplitLayer.whiteMatteLayer && !koukoutuSplitLayer.koukoutuMatte, "Semantic split should keep an opaque white redraw and never call Koukoutu even when its key is configured");
-      assert(koukoutuSplitLayer.importVisibleRect.left === 5 && koukoutuSplitLayer.importVisibleRect.top === 4, "White redraw split layers should preserve detected bounds for original-position metadata");
       const savedSplitUrlSendRequest = sendRequest;
       sendRequest = async () => ({
         ok: true,
@@ -1980,6 +1869,7 @@ async function runVmSmoke() {
       paintPixel(2, 1, 86, 54, 27, 255); // bow string/shadow
       paintPixel(2, 2, 226, 172, 126, 220); // unwanted hand over the bow
       const savedDebugJsonFileForInpaintInput = saveDebugJsonFile;
+      const savedDebugBase64Image = saveDebugBase64Image;
       let debugInpaintInput = "";
       let debugInpaintMeta = null;
       exportDocumentRegionAsBase64 = async (rect, outputSize) => {
@@ -2007,7 +1897,7 @@ async function runVmSmoke() {
       assert(bowHandInpaint.mask === null && bowHandInpaint.screenshotReferenceEdit === true, "Screenshot repaint workflow should produce a normal image reference and no API mask");
       assert(debugInpaintMeta?.workflow === "screenshot-reference-edit", "Screenshot repaint debug metadata should identify the screenshot-reference edit workflow");
       assert(debugInpaintMeta?.hasMask === false && debugInpaintMeta?.maskBytes === 0 && debugInpaintMeta?.maskFormat === null, "Screenshot repaint debug metadata should prove no API mask was attached");
-      assert(debugInpaintMeta?.uploadIsNormalImage === true && (debugInpaintMeta?.preserveAlpha === true || debugInpaintMeta?.whiteMatted === true), "Screenshot repaint debug metadata should mark the upload as an alpha-preserving normal image");
+      assert(debugInpaintMeta?.uploadIsNormalImage === true && (debugInpaintMeta?.preserveAlpha === true && debugInpaintMeta?.whiteMatted === false), "Screenshot repaint debug metadata should mark the upload as an alpha-preserving normal image");
       assert(debugInpaintMeta?.referenceCanvasSize === String(bowHandReference.width) + "x" + String(bowHandReference.height), "Screenshot repaint debug metadata should record the actual uploaded reference canvas size");
       assert(String(debugInpaintMeta?.referenceCropBox || "").includes(String(bowHandReference.width) + "x" + String(bowHandReference.height)), "Screenshot repaint debug metadata should record the uploaded screenshot crop box");
       assert(debugInpaintMeta?.referenceScale > 1, "Screenshot repaint debug metadata should record that a tiny selected crop was upscaled for upload");
@@ -2019,7 +1909,7 @@ async function runVmSmoke() {
       assert(bowHandInpaint.referenceCrop.sourceNonWhiteRatio > 0.1, "Screenshot repaint crop metadata should record that the original protected selection has visible non-white content");
       assert(bowHandInpaint.targetRect.left === 3 && bowHandInpaint.placementRect.width === 4, "Screenshot repaint should place the result back on the exact Photoshop selection");
       assert(bowHandReference.width >= MIN_SCREENSHOT_REFERENCE_EDGE && bowHandReference.height >= MIN_SCREENSHOT_REFERENCE_EDGE, "Bow/hand screenshot reference should upscale the tiny selected crop before upload");
-      assert(bowHandReference.rgba[3] === 0 || (bowHandReference.rgba[3] === 255 && bowHandReference.rgba[0] === 255), "Screenshot background should maintain proper alpha or padding");
+      assert(bowHandReference.rgba[3] === 0, "Screenshot background should maintain proper alpha or padding");
       assert(bowHandContentBounds && bowHandContentBounds.width > 0 && bowHandContentBounds.height > 0, "Protected bow/hand content should survive tiny-crop upscaling in the uploaded screenshot reference");
       assert(debugInpaintInput === bowHandInpaint.image, "Screenshot repaint debug input should save the actual padded image sent to the model");
       const cupStickerPixels = new Uint8Array(5 * 4 * 4);
@@ -2151,7 +2041,7 @@ async function runVmSmoke() {
       const keptBowHandItems = await cropScreenshotReferenceEditItems([{ b64: alreadySelectionSizedBowResult, format: "png" }], bowHandInpaint.referenceCrop);
       const keptBowHand = await decodePngRgbaBase64(keptBowHandItems[0].b64);
       assert(keptBowHand.width === 4 && keptBowHand.height === 3, "Selection-sized model screenshot results should import at the exact selected rectangle size");
-      assert(keptBowHand.width === 4 && keptBowHand.height === 3 && (keptBowHand.rgba[3] === 255 || keptBowHand.rgba[3] === 0), "Selection-sized model screenshot results should keep the full selected canvas bounds");
+      assert(keptBowHand.width === 4 && keptBowHand.height === 3 && keptBowHand.rgba[3] === 0, "Selection-sized model screenshot results should keep the full selected canvas bounds");
       const upscaledSelectionPixels = new Uint8Array(8 * 6 * 4).fill(255);
       const upscaledSelectionSizedBowResult = bytesToBase64(encodePngRgba(8, 6, upscaledSelectionPixels));
       const keptUpscaledBowItems = await cropScreenshotReferenceEditItems([{ b64: upscaledSelectionSizedBowResult, format: "png" }], bowHandInpaint.referenceCrop);
@@ -2218,9 +2108,9 @@ async function runVmSmoke() {
       const selectedBowOffset = (1 * 4 + 1) * 4;
       const selectedHandOffset = (2 * 4 + 2) * 4;
       assert(selectedReferenceEdit.width === 4 && selectedReferenceEdit.height === 3, "Reference edit upload should keep the selected region dimensions");
-      assert(selectedReferenceEdit.rgba[selectedTransparentOffset + 3] === 0 || selectedReferenceEdit.rgba[selectedTransparentOffset + 3] === 255, "Reference edit transparent pixels should upload cleanly");
+      assert(selectedReferenceEdit.rgba[selectedTransparentOffset + 3] === 0, "Reference edit transparent pixels should upload cleanly");
       assert(selectedReferenceEdit.rgba[selectedBowOffset] === 122 && selectedReferenceEdit.rgba[selectedBowOffset + 3] === 255, "Reference edit should preserve opaque subject pixels");
-      assert(selectedReferenceEdit.rgba[selectedHandOffset] > 224 && (selectedReferenceEdit.rgba[selectedHandOffset + 3] === 220 || selectedReferenceEdit.rgba[selectedHandOffset + 3] === 255), "Reference edit semi-transparent occluders should upload with preserved alpha or composited pixels");
+      assert(selectedReferenceEdit.rgba[selectedHandOffset] > 224 && selectedReferenceEdit.rgba[selectedHandOffset + 3] === 220, "Reference edit semi-transparent occluders should upload with exact preserved alpha");
       assert(debugReferenceRegion === bowHandReferenceEdit.image, "Reference edit debug input should save the actual image sent to the model");
       createInpaintScreenshotInputs = async () => ({
         image: b64,
@@ -2344,9 +2234,9 @@ async function runVmSmoke() {
       assert(stalePreviewItem.previewB64 === null && stalePreviewItem.previewBounds === null, "History materialization should drop stale cropped preview data");
       assert(stalePreviewItem.previewUrl === null && stalePreviewItem.previewUrlKey === null, "History materialization should drop stale Blob preview cache");
 
-      for (const mode of ["generate", "reference", "inpaint", "outpaint", "cutout", "split"]) {
+      for (const mode of ["generate", "reference", "inpaint", "outpaint", "split"]) {
         state.mode = mode;
-        $("promptInput").value = mode === "cutout" || mode === "split" ? "" : "test prompt";
+        $("promptInput").value = mode === "split" ? "" : "test prompt";
         $("negativePromptInput").value = "";
         await runGeneration();
         assert(state.results[0].mode === mode, mode + " stamped mode");
@@ -2394,9 +2284,8 @@ async function runVmSmoke() {
       assert(calls.some((call) => call[0] === "edit" && call[1] === "reference" && call[2] === false && call[3] === true), "selected reference edit branch should use the no-mask normal-upload Responses path");
       assert(calls.some((call) => call[0] === "edit" && call[1] === "inpaint" && call[2] === false && call[3] === true), "inpaint screenshot-reference branch should call image edits without a mask");
       assert(calls.some((call) => call[0] === "edit" && call[1] === "inpaint" && call[4] === "test prompt"), "inpaint screenshot-reference branch should pass the user's prompt directly");
-      assert(calls.some((call) => call[0] === "place" && call[1] === "inpaint" && call[3] === 40 && call[4] === "direct-selection-patch" && call[5] === null && call[6] === true && call[7] === false && call[8] === false && call[9] === false && call[10] === false && call[11] === false && call[12] === true && call[13] === false && call[17] === true), "inpaint should place the screenshot result by the full image rectangle over the selected rectangle without Photoshop post-import mask action");
+      assert(calls.some((call) => call[0] === "place" && call[1] === "inpaint" && call[3] === 40 && call[4] === "direct-selection-patch" && call[5] === null && call[6] === true && call[7] === false && call[8] === false && call[9] === false && call[10] === false && call[11] === false && call[12] === true && call[13] === false && call[17] === true), "inpaint should place the screenshot result through the pixel-exact RGBA path without applying a result-layer selection mask");
       assert(calls.some((call) => call[0] === "edit" && call[1] === "outpaint" && call[2] === true), "outpaint edit branch");
-      assert(calls.some((call) => call[0] === "cutout"), "cutout branch");
       assert(calls.some((call) => call[0] === "split"), "split branch");
       assert(calls.some((call) => call[0] === "expand" && call[2] === 120), "outpaint expand");
       assert(calls.some((call) => call[0] === "place" && call[1] === "outpaint" && call[3] === 120), "outpaint place");
@@ -2407,7 +2296,6 @@ async function runVmSmoke() {
           reference: calls.some((call) => call[0] === "edit" && call[1] === "reference"),
           inpaint: calls.some((call) => call[0] === "edit" && call[1] === "inpaint"),
           outpaint: calls.some((call) => call[0] === "edit" && call[1] === "outpaint"),
-          cutout: calls.some((call) => call[0] === "cutout"),
           split: calls.some((call) => call[0] === "split"),
         },
         invariants: {
@@ -2416,7 +2304,6 @@ async function runVmSmoke() {
           directSelectionPatch: calls.some((call) => call[0] === "place" && call[1] === "inpaint" && call[4] === "direct-selection-patch"),
           maskedOutpaint: calls.some((call) => call[0] === "edit" && call[1] === "outpaint" && call[2] === true),
           outpaintCanvasExpand: calls.some((call) => call[0] === "expand" && call[2] === 120),
-          cutoutOriginalSize: calls.some((call) => call[0] === "cutout" && call[1] === call[3] && call[2] === call[4] && call[3] > 0 && call[4] > 0),
           splitFullCanvas: calls.some((call) => call[0] === "split" && call[1] === call[3] && call[2] === call[4] && call[3] === 100 && call[4] === 80),
         },
       };
@@ -2441,7 +2328,7 @@ async function main() {
   checkPhotoshopMoveUnavailableGuard();
   checkSelectionRepaintCopy();
   const coverage = await runVmSmoke();
-  const modeNames = ["generate", "reference", "inpaint", "outpaint", "cutout", "split"];
+  const modeNames = ["generate", "reference", "inpaint", "outpaint", "split"];
   assert(coverage && modeNames.every((mode) => coverage.modes?.[mode]), "Smoke coverage matrix is missing one or more major modes");
   assert(Object.values(coverage.invariants || {}).every(Boolean), "Smoke coverage matrix is missing a critical placement or routing invariant");
   const modes = modeNames.map((mode) => `${mode}=ok`).join(" ");
@@ -2450,7 +2337,11 @@ async function main() {
   console.log("PLUGIN_SMOKE_OK");
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+module.exports = { createContext };
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

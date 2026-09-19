@@ -6,11 +6,11 @@ const net = require("net");
 const path = require("path");
 
 const root = path.resolve(__dirname, "..");
-const pluginPath = path.resolve(process.argv[2] || "/private/tmp/openai-photoshop-generator-dev");
+const pluginPath = path.resolve(process.argv[2] || root);
 const host = process.env.UXP_DEVTOOLS_HOST || "127.0.0.1";
 const port = Number(process.env.UXP_DEVTOOLS_PORT || 14001);
 const timeoutMs = Number(process.env.PHOTOSHOP_SMOKE_TIMEOUT_MS || 120000);
-const modes = ["generate", "reference", "inpaint", "cutout", "split", "outpaint"];
+const modes = ["generate", "reference", "inpaint", "split", "outpaint"];
 
 function readPluginVersion() {
   const appJs = fs.readFileSync(path.join(root, "src/app.js"), "utf8");
@@ -370,7 +370,7 @@ function assertSmokeLogs(consoleLines) {
   if (!joined.includes("offline diagnostics coverage:")) {
     throw new Error("Missing Photoshop smoke coverage matrix log");
   }
-  for (const invariant of ["noMaskReference=ok", "noMaskInpaint=ok", "directSelectionPatch=ok", "directSelectionBounds=ok", "maskedOutpaint=ok", "outpaintCanvasExpand=ok", "cutoutOriginalSize=ok", "splitFullCanvas=ok"]) {
+  for (const invariant of ["noMaskReference=ok", "noMaskInpaint=ok", "directSelectionPatch=ok", "directSelectionBounds=ok", "nativeAlphaReplacement=ok", "maskedOutpaint=ok", "outpaintCanvasExpand=ok", "splitFullCanvas=ok"]) {
     if (!joined.includes(invariant)) {
       throw new Error(`Missing Photoshop smoke invariant: ${invariant}`);
     }
@@ -565,7 +565,7 @@ async function main() {
       throw new Error(`Unexpected final Photoshop smoke status: ${statusText}`);
     }
     const matrix = modes.map((mode) => `${mode}=ok`).join(" ");
-    console.log(`PHOTOSHOP_SMOKE_MATRIX version=${version} runtimePluginVersion=${runtimePluginVersion} panelVersion=${runtimeVersion} ${matrix} noMaskReference=ok noMaskInpaint=ok directSelectionPatch=ok directSelectionBounds=ok maskedOutpaint=ok outpaintCanvasExpand=ok cutoutOriginalSize=ok splitFullCanvas=ok`);
+    console.log(`PHOTOSHOP_SMOKE_MATRIX version=${version} runtimePluginVersion=${runtimePluginVersion} panelVersion=${runtimeVersion} ${matrix} noMaskReference=ok noMaskInpaint=ok directSelectionPatch=ok directSelectionBounds=ok nativeAlphaReplacement=ok maskedOutpaint=ok outpaintCanvasExpand=ok splitFullCanvas=ok`);
     console.log(`PHOTOSHOP_SMOKE_OK version=${version} session=${debug.pluginSessionId}`);
   } finally {
     cdp.close();

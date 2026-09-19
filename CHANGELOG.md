@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.313] - 2026-09-19
+
+### Fixed
+
+- Selection repaint now writes RGBA pixels directly through Photoshop Imaging at the captured selection coordinates, including history imports. Transparent margins no longer turn into visible-bounds scaling or placement drift.
+- Transparent replacement results mask the original source stack only inside the replaced rectangle, so deleted content no longer shows through and semi-transparent edges do not double-compose. Original layer pixels and existing masks are retained in a pass-through source group; a Background layer is preserved hidden with a normal duplicate in that group. The whole import is one undoable history transaction and rolls back on failure or cancellation.
+- Tiny screenshot upscaling interpolates premultiplied Alpha, preventing black/colored fringes from hidden RGB. White artwork on transparency is now recognized as visible screenshot content instead of an empty white matte.
+- Restored strict Alpha assertions and added an offline native-transparency regression suite for exact pixel placement, final compositing, background layers, history imports, rollback, model routing, and transparency-toggle persistence.
+- Runtime audit no longer treats old UXP logs as evidence that Photoshop is currently running the new panel. Closed Photoshop is reported as `not-running` / `ready_on_disk`.
+
+### Changed
+
+- Minimum Photoshop version is now 25.0; the native pixel path also checks Imaging and history-rollback capabilities before modifying a document.
+- Updated English/Chinese workflow documentation and synchronized package, manifest, and panel versions.
+
+## [0.1.312] - 2026-09-18
+
+### Removed
+
+- Removed the Koukoutu cutout mode and its settings section: GPT Image 2.5 now produces native transparent PNGs, making the third-party background-removal API unnecessary. Historical cutout results in local history remain viewable and importable.
+- Removed all ComfyUI integration: the transparent-effect cutout workflow, the GPT Image2 Alpha style-reference (图二) workflow, and the basic-inpaint / sdxl-inpaint / flux-fill inpaint presets. The plugin now only uses OpenAI-compatible image endpoints.
+- Removed the ComfyUI URL setting, the 图二 style-reference picker, from the active plugin. Legacy workflow JSON and setup notes remain in the repository for reference, but are no longer used by the plugin.
+
+### Fixed
+
+- The transparent background toggle no longer falls back to a stale stored value: unchecking it now reliably sends `background: "auto"` instead of re-reading `"transparent"` from localStorage.
+
 ## [0.1.311] - 2026-09-18
 
 ### Added

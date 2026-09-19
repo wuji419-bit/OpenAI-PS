@@ -2316,8 +2316,7 @@ button:disabled {
   opacity: 0.7;
 }
 
-/* Compatibility for the local Photoshop build. The imported UI reference does
-   not include the Koukoutu/Auth controls, so keep those existing controls tidy
+/* Compatibility for the local Photoshop build. Keep the settings controls tidy
    without changing their behavior. */
 .settings-textarea {
   min-height: 88px;
@@ -2525,8 +2524,7 @@ button:disabled {
   height: 32px !important;
 }
 
-#applyAuthJsonBtn,
-#testKoukoutuBtn {
+#applyAuthJsonBtn {
   display: flex !important;
   width: 100% !important;
   min-height: 34px !important;

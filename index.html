@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenAI 图片</title>
-    <link rel="stylesheet" href="./src/styles.css?v=0.1.311" />
-    <script src="./src/app.js?v=0.1.311" defer></script>
+    <link rel="stylesheet" href="./src/styles.css?v=0.1.313" />
+    <script src="./src/app.js?v=0.1.313" defer></script>
   </head>
   <body>
     <main class="app-shell">
@@ -15,7 +15,7 @@
             <div class="title-inline">
               <span id="connectionBadge" class="connection-dot" aria-hidden="true" title="未配置 API Key"></span>
               <h1>OpenAI 图片</h1>
-              <span id="versionText" class="version-inline">v0.1.311</span>
+              <span id="versionText" class="version-inline">v0.1.313</span>
             </div>
             <button id="settingsToggleBtn" class="icon-button settings-entry-button" type="button" title="打开 API 设置" aria-label="打开 API 设置">
               设置
@@ -27,7 +27,6 @@
             <button type="button" data-mode="reference">参考图</button>
             <button type="button" data-mode="inpaint">选区重绘</button>
             <button type="button" data-mode="outpaint">扩图</button>
-            <button type="button" data-mode="cutout">抠图</button>
           </nav>
         </header>
 
@@ -97,18 +96,6 @@
             <textarea id="promptInput" class="prompt-input" placeholder="描述您想要生成的画面..."></textarea>
             <label id="negativePromptLabel" for="negativePromptInput" class="section-label secondary-label">反向提示词 (Negative Prompt)</label>
             <input id="negativePromptInput" class="field-input" type="text" placeholder="不希望出现的内容..." />
-          </section>
-
-          <section id="styleReferenceSection" class="section-block manual-reference-row hidden">
-            <div class="section-header">
-              <div class="minor-title">风格参考图（图二，可选）</div>
-            </div>
-            <div class="manual-reference-actions">
-              <button id="chooseStyleReferenceBtn" class="mini-button reference-action-button" type="button">选择图二</button>
-              <button id="clearStyleReferenceBtn" class="mini-button reference-action-button" type="button">清除图二</button>
-            </div>
-            <div id="styleReferenceSummary" class="manual-reference-summary">未选择图二：参考图模式使用原来的普通图生图。选择图二后，会走 ComfyUI GPT Image2 Alpha 工作流。</div>
-            <div id="styleReferencePreview" class="manual-reference-preview"></div>
           </section>
 
           <section class="section-block parameter-section">
@@ -236,7 +223,7 @@
       <section id="settingsView" class="settings-view hidden">
         <header class="settings-header">
           <button id="settingsBackBtn" class="icon-button back-button" type="button" title="返回" aria-label="返回"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5" /></svg></button>
-          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.311</span></div>
+          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.313</span></div>
         </header>
         <div class="settings-scroll">
           <section class="settings-group">
@@ -253,25 +240,11 @@
               <option value="gpt-image-2.5">通用 (Image 2.5)</option>
               <option value="gpt-image-2">上一代 (Image 2)</option>
             </datalist>
-            <label class="form-field"><span class="field-label">ComfyUI URL</span><input id="comfyUrlInput" type="text" value="http://192.168.1.128:8188" /></label>
           </section>
           <section class="settings-group">
             <div class="group-title">Endpoints</div>
             <label class="form-field"><span class="field-label">Image Gen Path</span><input id="generationPathInput" type="text" value="/images/generations" /></label>
             <label class="form-field"><span class="field-label">Edit Path</span><input id="editPathInput" type="text" value="/images/edits" /></label>
-          </section>
-          <section class="settings-group">
-            <div class="group-title">抠抠图 API</div>
-            <div class="settings-site-row">
-              官网：<a href="https://www.koukoutu.com/" target="_blank">www.koukoutu.com</a>
-              <span>API 文档：<a href="https://www.koukoutu.com/dev" target="_blank">/dev</a></span>
-            </div>
-            <label class="form-field"><span class="field-label">接口地址</span><input id="koukoutuEndpointInput" type="text" value="https://sync.koukoutu.com/v1/create" disabled /></label>
-            <label class="form-field"><span class="field-label">X-API-Key</span><input id="koukoutuApiKeyInput" type="password" placeholder="粘贴抠抠图 API Key" /></label>
-            <label class="form-field"><span class="field-label">输出格式</span><select id="koukoutuFormatInput"><option value="png">PNG 透明图层</option><option value="webp">WebP 省积分</option></select></label>
-            <label class="form-field"><span class="field-label">边缘增强</span><select id="koukoutuBorderInput"><option value="0">关闭</option><option value="1">1 倍增强</option><option value="2">2 倍增强</option></select></label>
-            <p class="settings-help">抠图模式使用同步单张接口，上传当前选区或整张画布，返回透明图后自动放回 Photoshop。</p>
-            <button id="testKoukoutuBtn" class="secondary-button" type="button">保存抠图配置</button>
           </section>
         </div>
         <footer class="settings-footer">

@@ -9,16 +9,20 @@ const { spawnSync } = require("child_process");
 const root = path.resolve(__dirname, "..");
 const appName = process.env.PHOTOSHOP_APP_NAME || "Adobe Photoshop 2026";
 const pluginId = "com.local.openai.photoshop.generator";
-const expectedModes = ["generate", "reference", "inpaint", "outpaint", "cutout", "split"];
-const expectedInvariants = ["noMaskReference", "noMaskInpaint", "directSelectionPatch", "directSelectionBounds", "maskedOutpaint", "outpaintCanvasExpand", "cutoutOriginalSize", "splitFullCanvas"];
+const expectedModes = ["generate", "reference", "inpaint", "outpaint", "split"];
+const expectedInvariants = ["noMaskReference", "noMaskInpaint", "directSelectionPatch", "directSelectionBounds", "maskedOutpaint", "outpaintCanvasExpand", "splitFullCanvas"];
 const managedFiles = [
   "manifest.json",
   "index.html",
   "CHANGELOG.md",
   "README_CN.md",
+  "README.md",
+  "package.json",
+  "docs/openai-image-flow.md",
   "src/app.js",
   "src/styles.css",
   "scripts/smoke-plugin.js",
+  "scripts/test-native-transparency.js",
   "scripts/audit-plugin-state.js",
   "scripts/reload-photoshop-plugin.js",
   "scripts/restart-photoshop-and-smoke.js",
@@ -317,7 +321,7 @@ function readLatestPhotoshopUxpLog() {
   };
 }
 
-function auditPhotoshopRuntime(expectedVersion) {
+function auditPhotoshopRuntime(expectedVersion, running = true) {
   const latest = readLatestPhotoshopUxpLog();
   const restartNextAction = "Save all PSD files, restart Photoshop, then run: node scripts/restart-photoshop-and-smoke.js --confirm-saved";
   if (!latest.found) {
@@ -333,6 +337,15 @@ function auditPhotoshopRuntime(expectedVersion) {
   const initEntries = [...text.matchAll(/\[([0-9_-]+)\][^\n]*\[OpenAI Photoshop Generator\] init ([0-9.]+)/g)]
     .map((match) => ({ time: match[1], version: match[2] }));
   const lastInit = initEntries[initEntries.length - 1] || null;
+  if (!running) {
+    return {
+      found: true, ok: false, file: latest.file, mtime: latest.mtime, lastInit,
+      expectedInitSeen: initEntries.some((entry) => entry.version === expectedVersion),
+      needsRestart: false, staleInMemoryVersion: null,
+      diagnosis: "Photoshop is not running. Previous UXP logs are not proof of a live loaded panel.",
+      nextAction: "Open Photoshop, load the plugin, then run: node scripts/audit-plugin-state.js --strict-runtime",
+    };
+  }
   const initVersionsSeenInTail = collectUniqueMatches(text, /\[OpenAI Photoshop Generator\] init ([0-9.]+)/g);
   const expectedInitSeen = initVersionsSeenInTail.includes(expectedVersion);
   const modalIds = collectUniqueMatches(text, /Plugin:\s*(100\d+)\s+is running a modal command/g);
@@ -363,6 +376,7 @@ function auditPhotoshopRuntime(expectedVersion) {
 
 function auditSmokeCoverageSource() {
   const smoke = readText(path.join(root, "scripts/smoke-plugin.js"));
+  const alpha = readText(path.join(root, "scripts/test-native-transparency.js"));
   const app = readText(path.join(root, "src/app.js"));
   const psSmoke = readText(path.join(root, "scripts/run-photoshop-smoke.js"));
   const modePresent = (mode) => {
@@ -371,6 +385,7 @@ function auditSmokeCoverageSource() {
   };
   return {
     localMatrix: smoke.includes("PLUGIN_SMOKE_MATRIX"),
+    nativeTransparency: alpha.includes("NATIVE_TRANSPARENCY_OK") && app.includes("nativeAlphaReplacement=") && psSmoke.includes("nativeAlphaReplacement=ok"),
     photoshopMatrix: psSmoke.includes("PHOTOSHOP_SMOKE_MATRIX"),
     runtimeCoverageLog: app.includes("offline diagnostics coverage:"),
     modes: Object.fromEntries(expectedModes.map((mode) => [mode, modePresent(mode)])),
@@ -385,17 +400,17 @@ function main() {
   const staleDirs = pluginDirs.filter((entry) => !entry.ok);
   const pluginInfo = readPhotoshopPluginInfo();
   const devtoolsWorkspace = readDevtoolsWorkspaceState(expectedVersion);
-  const runtime = auditPhotoshopRuntime(expectedVersion);
+  const runtime = auditPhotoshopRuntime(expectedVersion, photoshopProcess.running);
   const coverage = auditSmokeCoverageSource();
   const cacheOk = pluginInfo.found && pluginInfo.versionString === expectedVersion;
-  const coverageOk = coverage.localMatrix &&
+  const coverageOk = coverage.localMatrix && coverage.nativeTransparency &&
     coverage.photoshopMatrix &&
     coverage.runtimeCoverageLog &&
     Object.values(coverage.modes).every(Boolean) &&
     Object.values(coverage.invariants).every(Boolean);
   const diskOk = staleDirs.length === 0 && cacheOk;
-  const overall = diskOk && coverageOk && runtime.ok ? "complete" : (diskOk && coverageOk && runtime.needsRestart ? "needs_photoshop_restart" : "incomplete");
-  const panelVersionState = runtime.ok
+  const overall = diskOk && coverageOk && !photoshopProcess.running ? "ready_on_disk" : (diskOk && coverageOk && runtime.ok ? "complete" : (diskOk && coverageOk && runtime.needsRestart ? "needs_photoshop_restart" : "incomplete"));
+  const panelVersionState = !photoshopProcess.running ? "not-running" : runtime.ok
     ? "current"
     : (diskOk && runtime.staleInMemoryVersion ? "stale-in-memory" : (runtime.found ? "unverified" : "unknown"));
 
@@ -425,7 +440,7 @@ function main() {
   };
 
   const workspaceState = devtoolsWorkspace.ok === false ? "fail" : (devtoolsWorkspace.found ? "ok" : "none");
-  console.log(`PLUGIN_STATE_AUDIT version=${expectedVersion} overall=${overall} disk=${diskOk ? "ok" : "fail"} coverage=${coverageOk ? "ok" : "fail"} photoshopProcess=${photoshopProcess.running ? "running" : "stopped"} workspace=${workspaceState} panelVersion=${panelVersionState} photoshopRuntime=${runtime.ok ? "ok" : "needs-restart"} runtimeLastInit=${runtime.lastInit?.version || "none"} expectedInitSeen=${runtime.expectedInitSeen ? "true" : "false"} strictRuntime=${strictRuntime ? "true" : "false"}`);
+  console.log(`PLUGIN_STATE_AUDIT version=${expectedVersion} overall=${overall} disk=${diskOk ? "ok" : "fail"} coverage=${coverageOk ? "ok" : "fail"} photoshopProcess=${photoshopProcess.running ? "running" : "stopped"} workspace=${workspaceState} panelVersion=${panelVersionState} photoshopRuntime=${runtime.ok ? "ok" : (photoshopProcess.running ? "unverified" : "not-running")} runtimeLastInit=${runtime.lastInit?.version || "none"} expectedInitSeen=${runtime.expectedInitSeen ? "true" : "false"} strictRuntime=${strictRuntime ? "true" : "false"}`);
   console.log(JSON.stringify(report, null, 2));
   if (!diskOk || !coverageOk || (strictRuntime && !runtime.ok)) process.exitCode = 1;
 }

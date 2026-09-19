@@ -1,21 +1,19 @@
 # OpenAI Photoshop Generator
 
-Current version: **v0.1.311**
+Current version: **v0.1.313**
 
 ![OpenAI Photoshop Generator running inside Adobe Photoshop](stitch-reference/photoshop-panel-v0163.png)
 
-OpenAI Photoshop Generator is an open-source Adobe Photoshop UXP plugin built with Codex-assisted development. It focuses on OpenAI image generation and editing workflows inside Photoshop, including text-to-image, manual reference-image editing, Photoshop selection repainting, outpainting, and cutout workflows, without carrying over the heavy Stable Diffusion / A1111 / ComfyUI parameter surface.
+OpenAI Photoshop Generator is an open-source Adobe Photoshop UXP plugin built with Codex-assisted development. It focuses on OpenAI image generation and editing workflows inside Photoshop, including text-to-image, manual reference-image editing, Photoshop selection repainting, outpainting, and native-transparent PNG workflows, without carrying over the heavy Stable Diffusion / A1111 / ComfyUI parameter surface.
 
-The plugin is designed for fast creative loops: generate a draft, use the current canvas as a reference, repaint a rectangular selection, extend canvas edges, cut out transparent PNG layers, preview results, and place selected outputs back into the active Photoshop document.
+The plugin is designed for fast creative loops: generate a draft, use the current canvas as a reference, repaint a rectangular selection, extend canvas edges, generate native-transparent PNG layers, preview results, and place selected outputs back into the active Photoshop document.
 
 ## Current Features
 
 - Text-to-image generation through the OpenAI Image API.
 - Reference-image editing by selecting a local PNG/JPG/WebP in the panel, falling back to the current Photoshop selection or canvas when no manual reference is selected.
-- Optional two-image style transfer in Reference mode through a separately running external ComfyUI GPT Image2 Alpha workflow.
-- Rectangular-selection repainting from a white-matted screenshot reference, with no API mask and exact placement back into the original selection.
+- Rectangular-selection repainting from an Alpha-preserving screenshot reference, with no API mask and pixel-exact RGBA placement back into the original selection.
 - Outpainting by adding top, bottom, left, and right margins before an edit request.
-- Cutout mode for exporting the active canvas or selected region to Koukoutu's synchronous background-removal API and placing the returned transparent PNG back at the original position.
 - Result preview inside the panel.
 - Import generated results into the current Photoshop document as layers.
 - Fit imported output to the active rectangular selection when appropriate.
@@ -25,7 +23,7 @@ The plugin is designed for fast creative loops: generate a draft, use the curren
 
 ## OpenAI API Flow
 
-The default official OpenAI configuration is:
+Configure OpenAI-compatible endpoints and model IDs supported by your provider:
 
 ```text
 Base URL: https://api.openai.com/v1
@@ -44,24 +42,15 @@ Image edits: /images/edits
 
 `/chat/completions` is not a standard image endpoint. Use it only if your relay service intentionally maps chat requests to image base64 responses.
 
-## Koukoutu Cutout Flow
+## Native Transparency and Selection Replacement
 
-Cutout mode sends images to Koukoutu's synchronous `background-removal` API with `crop=0`, so returned transparent PNG/WebP files preserve the original exported canvas or selection size. This lets Photoshop place the result back at the original coordinates without drift.
+Photoshop 25.0 or newer is required. Fast/Deep image model IDs are provider-dependent; keep the configured OpenAI-compatible route and select a model exposed by that provider.
 
-```text
-Endpoint: https://sync.koukoutu.com/v1/create
-Auth header: X-API-Key
-```
+Selection repaint preserves Alpha throughout screenshot export, tiny-selection resizing, result normalization, and import. It writes pixels at the captured selection origin instead of scaling a smart object's visible bounds. For translucent replacements, original layers are retained inside a pass-through source group with a new outside-selection mask; the generated pixel layer sits above that group. This suppresses deleted source content without flattening or erasing original layers or their existing masks. Background layers are preserved hidden with a normal duplicate inside the group. Import is a single undoable transaction; errors and cancellation roll it back.
 
-Text-to-image, normal reference edit, selection repaint, outpaint, and split mode use the configured OpenAI-compatible image endpoints. Workflow descriptor files remain in [`comfyui-workflows/`](comfyui-workflows/) for connecting to a separately installed external ComfyUI service. The plugin does not bundle ComfyUI, models, or custom nodes:
+Run `npm run smoke` for the regular plugin smoke and strict native-transparency regressions, or `npm run test:alpha` for the latter alone. These tests do not use paid APIs. A stopped Photoshop process is reported by the runtime audit as `not-running`, not as a verified loaded panel.
 
-- `codex_basic_inpaint_masklock_api.json`
-- `codex_sdxl_inpaint_masklock_api.json`
-- `codex_flux_fill_inpaint_masklock_api.json`
-- `codex_transparent_png_effect_composite_api.json`
-- `codex_gpt_image2_alpha_api.json`
-
-For selection repainting, the plugin uses the configured Image Edits endpoint such as `/images/edits`.
+The active plugin no longer invokes Koukoutu or ComfyUI. Historical cutout results remain importable. Legacy workflow descriptors and setup notes are retained in the repository as reference material only.
 
 ## Repository Layout
 

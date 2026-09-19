@@ -6,9 +6,8 @@ The maintained plugin flow is implemented in `src/app.js`.
 
 - `generate` - text-to-image generation.
 - `reference` - export the current Photoshop document as a reference image and call the edit endpoint.
-- `inpaint` - export the selected rectangular region, generate a matching mask, and call the edit endpoint.
+- `inpaint` - export an Alpha-preserving rectangular screenshot and edit it through `/responses` without an API mask. Normalize the result to the captured size and write native RGBA at the captured origin; transparent replacements add a non-destructive source-group mask inside the same undoable transaction.
 - `outpaint` - create an expanded canvas input and mask, call the edit endpoint, expand the Photoshop canvas, and place the returned full-canvas layer back at 1:1 scale.
-- `cutout` - export the current document or selection and call Koukoutu's synchronous background-removal endpoint with `crop=0`.
 - `split` - export the full canvas, resolve automatic or user-specified semantic targets, and ask `gpt-image-2.5-sunburst` to extract each full-canvas transparent layer.
 
 ## Endpoints
@@ -43,7 +42,6 @@ OpenAI image responses are parsed from base64 image data. The plugin stores resu
 - Reference edit exports the active document and returns a preview.
 - Rectangular selection repaint exports the selected region and returns a preview.
 - Outpaint expands the Photoshop canvas by the requested margins and imports a full-canvas layer aligned at the new origin.
-- Koukoutu cutout preserves the exported canvas/selection dimensions and places the transparent result back without drift.
 - Split mode accepts either an empty prompt for automatic semantic targets or a single/manual comma-separated target list, and places each returned layer at full-canvas coordinates.
 - Import places the selected result into Photoshop.
 - History persists across panel reloads.
@@ -55,11 +53,11 @@ Run this from the plugin directory before opening Photoshop:
 ```sh
 node --check src/app.js
 node --check scripts/smoke-plugin.js
-node scripts/smoke-plugin.js
+npm run smoke
 ```
 
-The smoke script validates the manifest, icon path convention, UI element bindings, legacy Base URL migration, single-target split parsing, and the six mode branches without consuming API credits.
+The smoke script validates the manifest, icon path convention, UI element bindings, legacy Base URL migration, single-target split parsing, and the five maintained mode branches and native Alpha replacement regressions without consuming API credits.
 
 ## Test Asset
 
-For Photoshop-side manual testing, `/Volumes/D/悟空.psd` is a good layered PSD source. It has transparent regions and multiple visible semantic parts, making it useful for reference edit, selection repaint, cutout, and split-layer checks.
+For Photoshop-side manual testing, `/Volumes/D/悟空.psd` is a good layered PSD source. It has transparent regions and multiple visible semantic parts, making it useful for reference edit, selection repaint, and split-layer checks.

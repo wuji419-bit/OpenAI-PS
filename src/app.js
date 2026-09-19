@@ -8,7 +8,7 @@ const imaging = photoshop.imaging;
 const constants = photoshop.constants || {};
 const fs = storage.localFileSystem;
 const PLUGIN_ID = "com.local.openai.photoshop.generator";
-const PLUGIN_VERSION = "0.1.311";
+const PLUGIN_VERSION = "0.1.313";
 
 entrypoints.setup({
   panels: {
@@ -27,15 +27,9 @@ const HISTORY_KEY = "openaiPhotoshop.history.v1";
 const SETTINGS_KEY = "openaiPhotoshop.settings.v1";
 const PROMPT_DRAFT_KEY = "openaiPhotoshop.promptDrafts.v1";
 const DEFAULT_BASE_URL = "http://127.0.0.1:49456/v1";
-const DEFAULT_COMFY_URL = "http://192.168.1.128:8188";
-const KOUKOUTU_SYNC_URL = "https://sync.koukoutu.com/v1/create";
 const DEFAULT_CUTOUT_ANALYSIS_MODEL = "gpt-5.5";
 const DEFAULT_SEMANTIC_EDIT_MODEL = "gpt-5.5";
-const DEFAULT_GPT_IMAGE2_ALPHA_PROMPT = "图一是我的特效贴图，帮我把图二的风格元素转移到图一的特效贴图上面，保持图一的剪影、造型和数量，必须还是图一的样式输出，我要拿去做特效用。";
-const GPT_IMAGE2_ALPHA_FIXED_BACKGROUND_PROMPT = "输出背景是50%灰，色号是#808080，不要阴影脏边，不要发光污染，不要模糊，不要改变数量，不要重新排版，不要生成新图标。";
 const RESPONSES_MAIN_MODEL_FALLBACKS = ["gpt-5.5", "gpt-5", "gpt-6-astra", "gpt-4.1", "gpt-4o"];
-const COMFY_INPAINT_MAX_PIXELS = 1600 * 1600;
-const COMFY_INPAINT_MAX_EDGE = 1600;
 const OPENAI_INPAINT_FULL_CANVAS_MAX_PIXELS = 3840 * 2160;
 const PROTECTED_REPAINT_MIN_SOURCE_NON_WHITE_RATIO = 0.03;
 const PROTECTED_REPAINT_MIN_RESULT_NON_WHITE_RATIO = 0.002;
@@ -64,28 +58,6 @@ const DEFAULT_SEMANTIC_SPLIT_TARGETS = [
   { label: "UI图标按钮", target: "icons, badges, plates, buttons, emblems, progress fills, meters, slots, and UI controls as separate editable elements, excluding text on top" },
   { label: "特效阴影", target: "glows, sparks, smoke, magic effects, motion streaks, cast shadows, reflections, and highlights only when visually separate from the main object" },
 ];
-const COMFY_WORKFLOWS = {
-  "comfy:basic-inpaint": {
-    label: "ComfyUI Basic Inpaint",
-    file: "codex_basic_inpaint_masklock_api.json",
-    prefix: "codex_ps_basic_inpaint_masklock",
-  },
-  "comfy:sdxl-inpaint": {
-    label: "ComfyUI SDXL Inpaint",
-    file: "codex_sdxl_inpaint_masklock_api.json",
-    prefix: "codex_ps_sdxl_inpaint_masklock",
-  },
-  "comfy:flux-fill": {
-    label: "ComfyUI FLUX Fill",
-    file: "codex_flux_fill_inpaint_masklock_api.json",
-    prefix: "codex_ps_flux_fill_masklock",
-  },
-};
-const GPT_IMAGE2_ALPHA_WORKFLOW = {
-  label: "External ComfyUI GPT Image2 Alpha",
-  file: "codex_gpt_image2_alpha_api.json",
-  prefix: "codex_ps_gpt_image2_alpha",
-};
 const PROMPT_PRESETS = [
   {
     label: "局部角色替换",
@@ -119,7 +91,6 @@ const MODE_META = {
   reference: { hint: "使用当前画布作为参考图编辑", label: "参考图" },
   inpaint: { hint: "按当前选区进行局部重绘", label: "选区重绘" },
   outpaint: { hint: "向画布四周扩展内容", label: "扩图" },
-  cutout: { hint: "把当前画布或选区抠成透明 PNG", label: "抠图" },
   split: { hint: "识别完整元素，重绘成原坐标透明 PNG 图层", label: "拆图" },
 };
 
@@ -137,7 +108,6 @@ const state = {
   activeRequestController: null,
   activeXhrs: new Set(),
   cancelRequested: false,
-  styleReference: null,
   promptDrafts: {},
   promptDraftSaveSuspended: false,
   promptDraftAutosaveTimer: null,
@@ -313,11 +283,8 @@ function bindEvents() {
     setStatus("配置已保存");
   });
   $("testConnectionBtn").addEventListener("click", testConnection);
-  $("testKoukoutuBtn").addEventListener("click", testKoukoutuConnection);
   $("apiKeyVisibilityBtn").addEventListener("click", toggleApiKeyVisibility);
   $("applyAuthJsonBtn").addEventListener("click", applyAuthJson);
-  $("chooseStyleReferenceBtn").addEventListener("click", chooseStyleReference);
-  $("clearStyleReferenceBtn").addEventListener("click", clearStyleReference);
 
   $("generateBtn").addEventListener("click", runGeneration);
   $("cancelRequestBtn").addEventListener("click", cancelCurrentGeneration);
@@ -392,7 +359,6 @@ function bindEvents() {
 function loadSettings() {
   const defaults = {
     baseUrl: DEFAULT_BASE_URL,
-    comfyUrl: DEFAULT_COMFY_URL,
     apiKey: "",
     model: "gpt-image-2.5-flare",
     generationPath: "/images/generations",
@@ -402,26 +368,17 @@ function loadSettings() {
     background: "auto",
     count: 1,
     format: "png",
-    koukoutuApiKey: "",
-    koukoutuFormat: "png",
-    koukoutuCrop: 0,
-    koukoutuBorder: 0,
   };
 
   const stored = readJsonLocal(SETTINGS_KEY, {});
   const settings = { ...defaults, ...stored };
   settings.baseUrl = normalizeBaseUrl(settings.baseUrl);
-  settings.comfyUrl = normalizeComfyUrl(settings.comfyUrl);
   $("baseUrlInput").value = settings.baseUrl;
-  $("comfyUrlInput").value = settings.comfyUrl;
   $("apiKeyInput").value = settings.apiKey;
   $("quickApiKeyInput").value = settings.apiKey;
   $("modelInput").value = settings.model;
   $("generationPathInput").value = settings.generationPath;
   $("editPathInput").value = settings.editPath;
-  $("koukoutuApiKeyInput").value = settings.koukoutuApiKey || "";
-  $("koukoutuFormatInput").value = settings.koukoutuFormat || "png";
-  $("koukoutuBorderInput").value = String(clampInteger(settings.koukoutuBorder, 0, 2, 0));
   $("sizeInput").value = settings.size;
   $("qualityInput").value = normalizeResponsesImageQuality(settings.quality);
   $("countInput").value = clampInteger(settings.count, 1, MAX_BATCH_COUNT, 1);
@@ -430,7 +387,6 @@ function loadSettings() {
     $("transparentBgInput").checked = settings.background === "transparent";
   }
   syncModelTierButtons(settings.model);
-  renderStyleReference();
 }
 
 function saveSettings() {
@@ -477,69 +433,6 @@ function applyAuthJson() {
   setStatus("已切换为官方 OpenAI API 直连");
 }
 
-async function chooseStyleReference() {
-  try {
-    const picked = await fs.getFileForOpening({
-      types: ["png", "jpg", "jpeg", "webp"],
-      allowMultiple: false,
-    });
-    const file = Array.isArray(picked) ? picked[0] : picked;
-    if (!file) return;
-
-    const buffer = await file.read({ format: storage.formats.binary });
-    const bytes = new Uint8Array(buffer);
-    const format = inferImageFormatFromBytes(bytes) || inferImageFormatFromValue(file.name) || "png";
-    if (!["png", "jpeg", "jpg", "webp"].includes(format)) {
-      throw new Error("图二只支持 PNG / JPG / WebP");
-    }
-
-    state.styleReference = {
-      name: file.name || "style-reference",
-      b64: arrayBufferToBase64(buffer),
-      format: format === "jpg" ? "jpeg" : format,
-      bytes: buffer.byteLength || bytes.length,
-    };
-    renderStyleReference();
-    setStatus(`已选择图二：${state.styleReference.name}，参考图模式将调用外部 ComfyUI Alpha workflow`);
-  } catch (error) {
-    console.error("[style-reference] choose failed", error);
-    setStatus(`选择图二失败：${error.message || error}`);
-  }
-}
-
-function clearStyleReference() {
-  state.styleReference = null;
-  renderStyleReference();
-  setStatus("已清除图二：参考图模式恢复原来的普通图生图");
-}
-
-function renderStyleReference() {
-  const summary = $("styleReferenceSummary");
-  const preview = $("styleReferencePreview");
-  if (!summary || !preview) return;
-
-  preview.innerHTML = "";
-  const ref = state.styleReference;
-  preview.classList.toggle("has-items", Boolean(ref?.b64));
-  if (!ref?.b64) {
-    summary.textContent = "未选择图二：参考图模式使用原来的普通图生图。选择图二后，会走外部 ComfyUI GPT Image2 Alpha 工作流。";
-    return;
-  }
-
-  summary.textContent = `已选择图二：${ref.name || "style-reference"}（${formatBytes(ref.bytes || estimateBase64Bytes(ref.b64))}）。生成时会把当前 Photoshop 画布/选区作为图一，图二作为风格参考。`;
-  const item = document.createElement("div");
-  item.className = "manual-reference-item";
-  const image = document.createElement("img");
-  image.src = toDataUrl(ref.b64, ref.format || inferImageFormatFromValue(ref.b64) || "png");
-  image.alt = "图二风格参考";
-  const index = document.createElement("span");
-  index.className = "manual-reference-index";
-  index.textContent = "图二";
-  item.appendChild(image);
-  item.appendChild(index);
-  preview.appendChild(item);
-}
-
 function extractOpenAIApiKey(raw) {
   const value = String(raw || "").trim();
   if (!value) return "";
@@ -584,23 +477,17 @@ function findApiKeyInObject(value) {
 
 function getSettings() {
   const baseUrl = normalizeBaseUrl($("baseUrlInput").value.trim() || DEFAULT_BASE_URL);
-  const comfyUrl = normalizeComfyUrl($("comfyUrlInput").value.trim() || DEFAULT_COMFY_URL);
   return {
     baseUrl,
-    comfyUrl,
     apiKey: $("apiKeyInput").value.trim(),
     model: $("modelInput").value.trim() || "gpt-image-2.5-flare",
     generationPath: normalizePath($("generationPathInput").value.trim() || "/images/generations"),
     editPath: normalizePath($("editPathInput").value.trim() || "/images/edits"),
     size: $("sizeInput").value,
     quality: normalizeResponsesImageQuality($("qualityInput").value),
-    background: $("transparentBgInput")?.checked ? "transparent" : normalizeImageBackground(readJsonLocal(SETTINGS_KEY, {})?.background || "auto"),
+    background: $("transparentBgInput")?.checked ? "transparent" : "auto",
     count: clampInteger($("countInput").value, 1, MAX_BATCH_COUNT, 1),
     format: "png",
-    koukoutuApiKey: $("koukoutuApiKeyInput").value.trim(),
-    koukoutuFormat: $("koukoutuFormatInput").value || "png",
-    koukoutuCrop: 0,
-    koukoutuBorder: clampInteger($("koukoutuBorderInput").value, 0, 2, 0),
   };
 }
 
@@ -724,16 +611,13 @@ function updateModeUI() {
   });
 
   const showReferenceContext = state.mode === "reference";
-  const showSelectionContext = state.mode === "inpaint" || state.mode === "outpaint" || state.mode === "cutout" || state.mode === "split";
+  const showSelectionContext = state.mode === "inpaint" || state.mode === "outpaint" || state.mode === "split";
   const showNegativePrompt = isNegativePromptEnabledForMode(state.mode);
   const showPromptPresets = isPromptPresetEnabledForMode(state.mode);
   setElementHidden("outpaintControls", state.mode !== "outpaint");
-  setElementHidden("promptSection", state.mode === "cutout");
-  setElementHidden("sizeField", state.mode === "inpaint" || state.mode === "cutout" || state.mode === "split");
-  setElementHidden("qualityField", state.mode === "cutout");
+  setElementHidden("sizeField", state.mode === "inpaint" || state.mode === "split");
   setElementHidden("modeContextPanel", !showSelectionContext);
   setElementHidden("referenceContext", !showReferenceContext);
-  setElementHidden("styleReferenceSection", !showReferenceContext);
   setElementHidden("selectionContext", !showSelectionContext);
   setElementHidden("negativePromptLabel", !showNegativePrompt);
   setElementHidden("negativePromptInput", !showNegativePrompt);
@@ -779,15 +663,6 @@ function updateModeUI() {
       placeholder: "描述扩展区域应该补出的画面...",
       negativePlaceholder: "不希望在扩展区域出现的内容...",
     },
-    cutout: {
-      icon: "◌",
-      title: "特效抠图",
-      text: "上传当前画布或选区到抠抠图同步接口，输出透明 PNG 并放回原位置。",
-      prompt: "抠图类型 (可选，留空自动)",
-      negative: "辅助说明 (可选)",
-      placeholder: "auto / 白底主体 / 黑底光效 / 火焰 / 蓝色电光 / alpha...",
-      negativePlaceholder: "例如：更透明、保留亮部、边缘柔和...",
-    },
   };
 
   modeLabels.split = {
@@ -812,11 +687,8 @@ function updateModeUI() {
 
   const hint = $("modeHint");
   if (hint) {
-    hint.textContent = state.mode === "reference" && state.styleReference?.b64
-      ? "使用当前画布作为图一，并用图二风格参考调用外部 ComfyUI Alpha workflow"
-      : MODE_META[state.mode]?.hint || "直接生成新图";
+    hint.textContent = MODE_META[state.mode]?.hint || "直接生成新图";
   }
-  renderStyleReference();
 }
 
 function isNegativePromptEnabledForMode(mode) {
@@ -959,16 +831,7 @@ function applyPromptPreset(preset) {
 async function testConnection() {
   const settings = getSettings();
   $("baseUrlInput").value = settings.baseUrl;
-  $("comfyUrlInput").value = settings.comfyUrl;
 
-  if (isComfyModel(settings.model)) {
-    if (!settings.comfyUrl) {
-      setStatus("请先填写 ComfyUI URL");
-      return;
-    }
-    await testComfyConnection(settings);
-    return;
-  }
 
   if (!settings.baseUrl) {
     setStatus("请先填写 Base URL");
@@ -1010,51 +873,6 @@ async function testConnection() {
   }
 }
 
-async function testComfyConnection(settings) {
-  $("testConnectionBtn").disabled = true;
-  $("saveSettingsBtn").disabled = true;
-  setStatus("正在测试 ComfyUI...");
-
-  try {
-    const statsResponse = await sendRequest(buildComfyUrl(settings.comfyUrl, "/system_stats"), {
-      method: "GET",
-    }, "测试 ComfyUI");
-    if (!statsResponse.ok) {
-      setStatus(`ComfyUI 有响应：HTTP ${statsResponse.status}`);
-      return;
-    }
-
-    const checkpointsResponse = await sendRequest(buildComfyUrl(settings.comfyUrl, "/models/checkpoints"), {
-      method: "GET",
-    }, "读取 ComfyUI 模型");
-    const checkpointsText = checkpointsResponse.ok ? await checkpointsResponse.text() : "[]";
-    let checkpoints = [];
-    try {
-      checkpoints = JSON.parse(checkpointsText);
-    } catch (error) {
-      checkpoints = [];
-    }
-    const modelList = Array.isArray(checkpoints) ? checkpoints : checkpoints?.value || [];
-    const modelHint = modelList.length ? `模型：${modelList.slice(0, 3).join(" / ")}` : "未读取到 checkpoint";
-    setStatus(`ComfyUI 已连接：${modelHint}`);
-  } catch (error) {
-    setStatus(`ComfyUI 连接失败：${error.message || error}`);
-  } finally {
-    $("testConnectionBtn").disabled = false;
-    $("saveSettingsBtn").disabled = false;
-  }
-}
-
-async function testKoukoutuConnection() {
-  const settings = getSettings();
-  if (!settings.koukoutuApiKey) {
-    setStatus("请先填写抠抠图 API Key");
-    return;
-  }
-  saveSettings();
-  setStatus("抠抠图 API Key 已保存；首次抠图时会验证额度和权限");
-}
-
 function resolveSplitImageModel(model) {
   const current = String(model || "").trim();
   if (/gpt-image-2\.5-sunburst/i.test(current)) return current;
@@ -1068,34 +886,20 @@ async function runGeneration() {
 
   const settings = getSettings();
   $("baseUrlInput").value = settings.baseUrl;
-  $("comfyUrlInput").value = settings.comfyUrl;
-  if (state.mode !== "cutout" && state.mode !== "inpaint" && isComfyModel(settings.model)) {
-    settings.model = "gpt-image-2.5-flare";
-    $("modelInput").value = settings.model;
-    syncModelTierButtons(settings.model);
-  }
-  if (state.mode === "cutout" && !settings.koukoutuApiKey) {
-    setStatus("请先在设置里填写抠抠图 API Key");
-    return;
-  }
-  if (!settings.apiKey && !isComfyModel(settings.model) && state.mode !== "cutout") {
+  if (!settings.apiKey) {
     setStatus("请先填写 OpenAI API Key");
     return;
   }
 
   const rawPrompt = $("promptInput").value.trim();
-  const useStyleReferenceWorkflow = state.mode === "reference" && Boolean(state.styleReference?.b64);
-  if (!rawPrompt && state.mode !== "cutout" && state.mode !== "split" && !useStyleReferenceWorkflow) {
+  if (!rawPrompt && state.mode !== "split") {
     setStatus("请先输入提示词");
     return;
   }
 
   savePromptDraftForMode();
   const negativePrompt = isNegativePromptEnabledForMode(state.mode) ? $("negativePromptInput").value.trim() : "";
-  const prompt = buildPrompt(
-    rawPrompt || (useStyleReferenceWorkflow ? DEFAULT_GPT_IMAGE2_ALPHA_PROMPT : "auto"),
-    negativePrompt
-  );
+  const prompt = buildPrompt(rawPrompt || "auto", negativePrompt);
   saveSettings();
   const runController = createAbortController();
   state.activeRequestController = runController;
@@ -1115,6 +919,7 @@ async function runGeneration() {
     let targetRect = null;
     let placementRect = null;
     let placementWarning = "";
+    let inpaintSourceContext = null;
 
     if (state.mode === "generate") {
       setProgress(20, true);
@@ -1122,27 +927,7 @@ async function runGeneration() {
     } else if (state.mode === "reference") {
       setProgress(18, true);
       const selection = await getSelectionInfo();
-      if (state.styleReference?.b64) {
-        const docSize = getDocumentSize();
-        setStatus("正在导出当前 Photoshop 图一，准备外部 ComfyUI Alpha 图生图...");
-        const alphaInput = await createGptImage2AlphaInputs(selection, docSize);
-        outputSize = alphaInput.displaySize;
-        targetRect = alphaInput.targetRect;
-        placementRect = alphaInput.placementRect;
-        setProgress(40, true);
-        items = await requestGptImage2AlphaComfy(settings, prompt, alphaInput.image, state.styleReference.b64, {
-          styleReferenceName: state.styleReference.name,
-          sourceSize: alphaInput.displaySize,
-        });
-        items = (items || []).map((item) => ({
-          ...item,
-          placementMode: "alpha-style-patch",
-          targetRect: alphaInput.targetRect,
-          placementRect: alphaInput.placementRect,
-          cropRect: null,
-          skipPreviewCrop: true,
-        }));
-      } else if (state.manualReferenceImage?.b64) {
+      if (state.manualReferenceImage?.b64) {
         setStatus(`正在使用手动参考图：${state.manualReferenceImage.name || "reference"}`);
         const reference = await createManualReferenceInputs(settings);
         outputSize = reference.displaySize;
@@ -1215,6 +1000,7 @@ async function runGeneration() {
         throw new Error("请先用选区工具选中要重绘的区域");
       }
       const docSize = getDocumentSize();
+      inpaintSourceContext = { documentId: getDocumentId(app.activeDocument), ...docSize };
       setProgress(34, true);
       setStatus("正在读取当前 Photoshop 选区...");
       const inpaintSettings = getInpaintSettings(settings);
@@ -1271,15 +1057,6 @@ async function runGeneration() {
         targetRect: outpaint.targetRect,
         placementRect: outpaint.placementRect,
       }));
-    } else if (state.mode === "cutout") {
-      setProgress(18, true);
-      const cutout = await createCutoutInputs();
-      outputSize = cutout.displaySize;
-      targetRect = cutout.targetRect;
-      placementRect = cutout.placementRect;
-      setProgress(52, true);
-      setStatus("正在调用抠抠图同步抠图 API...");
-      items = [await normalizeCutoutResultItem(await requestKoukoutuCutout(settings, cutout.image), cutout)];
     } else if (state.mode === "split") {
       setProgress(18, true);
       const docSize = getDocumentSize();
@@ -1389,21 +1166,24 @@ async function runGeneration() {
         );
         setProgress(92 + Math.round(((index + 1) / stamped.length) * 7), true);
       }
-    } else if (state.mode === "cutout" && stamped[0]) {
-      setProgress(92, true);
-      setStatus("正在把抠图结果放回原位置...");
-      await placeResultAsLayer(stamped[0], stamped[0].placementRect || stamped[0].targetRect, "Koukoutu Cutout", null, { preserveImageAspect: true });
     } else if (state.mode === "inpaint" && stamped[0]) {
       setProgress(92, true);
       setStatus("正在把截图重绘结果按原选区位置放回...");
       try {
+        if (inpaintSourceContext?.documentId != null && (
+          getDocumentId(app.activeDocument) !== inpaintSourceContext.documentId ||
+          Math.round(toNumber(app.activeDocument?.width)) !== inpaintSourceContext.width ||
+          Math.round(toNumber(app.activeDocument?.height)) !== inpaintSourceContext.height
+        )) {
+          throw new Error("生成期间目标文档或画布尺寸已改变；请返回原文档并确认后手动导入");
+        }
         const shouldMaskInpaint = isMaskedInpaintLayerResult(stamped[0]);
         const directSelectionPatch = isDirectSelectionPatchResult(stamped[0]);
         const needsPostImportMask = shouldMaskInpaint && !stamped[0].preclippedImport;
         const placementRect = stamped[0].placementRect || stamped[0].targetRect;
         await placeResultAsLayer(stamped[0], placementRect, "OpenAI Inpaint", needsPostImportMask ? (stamped[0].cropRect || stamped[0].targetRect) : null, {
           fitByImageSize: shouldMaskInpaint || directSelectionPatch,
-          forceFullImageRect: directSelectionPatch,
+          pixelExactSelectionPatch: directSelectionPatch,
           alignVisibleRect: shouldMaskInpaint,
           preserveImageAspect: false,
           rasterizeBeforeMask: needsPostImportMask,
@@ -1447,9 +1227,7 @@ async function runGeneration() {
       }
     }
     setProgress(100, true);
-    setStatus(placementWarning || (state.mode === "cutout"
-      ? "完成：已创建抠图图层并放回原位置"
-      : state.mode === "inpaint"
+    setStatus(placementWarning || (state.mode === "inpaint"
       ? (isDirectSelectionPatchResult(stamped[0])
         ? "完成：已按原选区尺寸直接放回截图重绘结果，原图未变"
         : "完成：已作为选区保护新图层放回，原图未变")
@@ -1491,7 +1269,6 @@ async function runSixModeSmoke() {
     ["generate", "small cute game icon sticker, orange hero cat, plain white background"],
     ["reference", "保持当前悟空猫角色风格，微调高光，让边缘更干净"],
     ["inpaint", "只把选区里的局部毛发高光变得更清晰，其他像素保持不变"],
-    ["cutout", "抠出当前角色，保留原始边缘"],
     ["split", "头发"],
     ["outpaint", "自然扩展画布边缘，保持原始卡通游戏图标风格"],
   ];
@@ -1560,7 +1337,6 @@ async function runOfflineSixModeDiagnostics() {
     ["generate", "offline diagnostic game icon"],
     ["reference", "保持参考图主体不变，只做轻微清晰化"],
     ["inpaint", "把选区里的圆形手部去掉，弓不要变"],
-    ["cutout", "离线抠图诊断"],
     ["split", "弓，箭头"],
     ["outpaint", "自然扩展白底画布边缘"],
   ];
@@ -1579,9 +1355,6 @@ async function runOfflineSixModeDiagnostics() {
           updateModeUI();
           $("promptInput").value = prompt;
           $("negativePromptInput").value = mode === "inpaint" ? "不要改变弓、箭头、线条、颜色" : "";
-          if (mode === "split") {
-            $("koukoutuApiKeyInput").value = "";
-          }
           if (mode === "reference" || mode === "inpaint") {
             await selectSmokeRect();
           }
@@ -1625,24 +1398,19 @@ async function runOfflineSixModeDiagnostics() {
       directSelectionPatchCall.useCurrentSelectionMask ||
       directSelectionPatchCall.useSavedSelectionMask ||
       directSelectionPatchCall.requireMask ||
-      !directSelectionPatchCall.forceFullImageRect
+      !directSelectionPatchCall.pixelExactSelectionPatch
     ) {
-      failures.push("inpaint: 选区重绘没有按原选区完整图层矩形放回，或仍在使用导入后蒙版");
+      failures.push("inpaint: 选区重绘没有按原选区坐标直接写入 RGBA，或仍在使用导入后结果蒙版");
+    }
+    if (!directSelectionPatchCall?.nativeAlphaReplacement) {
+      failures.push("inpaint: 真实画布 Alpha 与返回 PNG 不一致，透明区域仍可能透出旧内容");
     }
     if (!directSelectionPatchCall?.boundsMatchSelection) {
-      failures.push("inpaint: 选区重绘真实导入图层边界没有贴回原选区，仍可能出现位置漂移");
+      failures.push("inpaint: 选区重绘可见像素边界没有保持 PNG 内偏移，仍可能出现位置漂移");
     }
     const outpaintCanvasExpandCall = diagnostics.expandCanvasCalls.find((call) => call.mode === "outpaint");
     if (!outpaintCanvasExpandCall || outpaintCanvasExpandCall.targetWidth <= outpaintCanvasExpandCall.baseWidth || outpaintCanvasExpandCall.targetHeight <= outpaintCanvasExpandCall.baseHeight) {
       failures.push("outpaint: 扩图没有记录到画布扩展动作");
-    }
-    const cutoutOriginalSizeCall = diagnostics.cutoutCalls.find((call) => call.mode === "cutout");
-    if (
-      !cutoutOriginalSizeCall ||
-      cutoutOriginalSizeCall.outputWidth !== cutoutOriginalSizeCall.inputWidth ||
-      cutoutOriginalSizeCall.outputHeight !== cutoutOriginalSizeCall.inputHeight
-    ) {
-      failures.push("cutout: 抠图结果没有保持原导出区域尺寸，可能导致回贴漂移");
     }
     const splitFullCanvasCall = diagnostics.splitCalls.find((call) => call.mode === "split");
     if (
@@ -1659,11 +1427,11 @@ async function runOfflineSixModeDiagnostics() {
     const coverageInvariants = [
       `noMaskReference=${selectedReferenceCall && !selectedReferenceCall.hasMask && selectedReferenceCall.screenshotReferenceEdit ? "ok" : "fail"}`,
       `noMaskInpaint=${screenshotInpaintCall && !screenshotInpaintCall.hasMask && screenshotInpaintCall.screenshotReferenceEdit ? "ok" : "fail"}`,
-      `directSelectionPatch=${directSelectionPatchCall && directSelectionPatchCall.fitByImageSize && directSelectionPatchCall.forceFullImageRect && !directSelectionPatchCall.hasCropRect && !directSelectionPatchCall.requireMask ? "ok" : "fail"}`,
+      `directSelectionPatch=${directSelectionPatchCall && directSelectionPatchCall.fitByImageSize && directSelectionPatchCall.pixelExactSelectionPatch && !directSelectionPatchCall.hasCropRect && !directSelectionPatchCall.requireMask ? "ok" : "fail"}`,
       `directSelectionBounds=${directSelectionPatchCall?.boundsMatchSelection ? "ok" : "fail"}`,
+      `nativeAlphaReplacement=${directSelectionPatchCall?.nativeAlphaReplacement ? "ok" : "fail"}`,
       `maskedOutpaint=${maskedOutpaintCall && maskedOutpaintCall.hasMask && !maskedOutpaintCall.screenshotReferenceEdit ? "ok" : "fail"}`,
       `outpaintCanvasExpand=${outpaintCanvasExpandCall && outpaintCanvasExpandCall.targetWidth > outpaintCanvasExpandCall.baseWidth && outpaintCanvasExpandCall.targetHeight > outpaintCanvasExpandCall.baseHeight ? "ok" : "fail"}`,
-      `cutoutOriginalSize=${cutoutOriginalSizeCall && cutoutOriginalSizeCall.outputWidth === cutoutOriginalSizeCall.inputWidth && cutoutOriginalSizeCall.outputHeight === cutoutOriginalSizeCall.inputHeight ? "ok" : "fail"}`,
       `splitFullCanvas=${splitFullCanvasCall && splitFullCanvasCall.outputCount > 0 && splitFullCanvasCall.outputs.every((item) => item.width === splitFullCanvasCall.docWidth && item.height === splitFullCanvasCall.docHeight) ? "ok" : "fail"}`,
     ].join(" ");
     console.log(`[OpenAI Photoshop Generator] offline diagnostics coverage: ${coverageModes} ${coverageInvariants}`);
@@ -1671,7 +1439,7 @@ async function runOfflineSixModeDiagnostics() {
     if (failures.length) {
       setStatus(`离线诊断完成但有 ${failures.length} 项失败：${failures.join("；")}`);
     } else {
-      setStatus("离线诊断通过：六个主要功能路径均已跑通，未调用外部图片接口");
+      setStatus("离线诊断通过：五个主要功能路径均已跑通，未调用外部图片接口");
     }
   } catch (error) {
     console.error("[OpenAI Photoshop Generator] offline diagnostics failed", error);
@@ -1685,7 +1453,6 @@ async function runOfflineSixModeDiagnostics() {
 function captureOfflineDiagnosticState() {
   const fieldIds = [
     "apiKeyInput",
-    "koukoutuApiKeyInput",
     "countInput",
     "padTopInput",
     "padRightInput",
@@ -1719,7 +1486,6 @@ function applyOfflineDiagnosticSettings() {
   state.manualReferenceImage = null;
   renderManualReferenceImage();
   $("apiKeyInput").value = "sk-offline-diagnostic";
-  $("koukoutuApiKeyInput").value = "offline-diagnostic";
   $("countInput").value = "1";
   $("padTopInput").value = "32";
   $("padRightInput").value = "32";
@@ -1730,7 +1496,6 @@ function applyOfflineDiagnosticSettings() {
 async function withOfflineDiagnosticStubs(callback) {
   const diagnostics = {
     editCalls: [],
-    cutoutCalls: [],
     splitCalls: [],
     splitRegionCalls: [],
     expandCanvasCalls: [],
@@ -1739,7 +1504,6 @@ async function withOfflineDiagnosticStubs(callback) {
   const originals = {
     requestGenerations,
     requestEdits,
-    requestKoukoutuCutout,
     requestSemanticSplitTargetRegions,
     requestSemanticSplitLayers,
     expandCanvasForOutpaint,
@@ -1770,7 +1534,8 @@ async function withOfflineDiagnosticStubs(callback) {
       const cropTop = Math.max(0, Math.min(canvasHeight - 1, Math.round(crop.top || 0)));
       const output = new Uint8Array(canvasWidth * canvasHeight * 4);
       output.fill(255);
-      const patch = await decodePngRgbaBase64(createOfflineDiagnosticPngBase64(cropWidth, cropHeight, "inpaint-screenshot-smoke"));
+      const patch = await decodePngRgbaBase64(createOfflineDiagnosticPngBase64(cropWidth, cropHeight, "inpaint-screenshot-smoke", { transparent: true }));
+      patch.rgba.set([255, 60, 20, 128], 0); // Exact semi-transparent pixel for real-host Alpha verification.
       blitRgba(patch.rgba, patch.width, patch.height, output, canvasWidth, canvasHeight, cropLeft, cropTop);
       return [{
         b64: bytesToBase64(encodePngRgba(canvasWidth, canvasHeight, output)),
@@ -1781,20 +1546,6 @@ async function withOfflineDiagnosticStubs(callback) {
       b64: createOfflineDiagnosticPngBase64(imageSize.width, imageSize.height, maskB64 ? "masked-edit" : "reference-edit"),
       format: "png",
     }];
-  };
-  requestKoukoutuCutout = async (settings, imageB64) => {
-    const imageSize = getPngDimensionsFromBase64(imageB64) || { width: 512, height: 512 };
-    diagnostics.cutoutCalls.push({
-      mode: state.mode,
-      inputWidth: imageSize.width,
-      inputHeight: imageSize.height,
-      outputWidth: imageSize.width,
-      outputHeight: imageSize.height,
-    });
-    return {
-      b64: createOfflineDiagnosticPngBase64(imageSize.width, imageSize.height, "cutout", { transparent: true }),
-      format: "png",
-    };
   };
   requestSemanticSplitTargetRegions = async (settings, imageB64, docSize, targets) => {
     const width = Math.max(1, Math.round(docSize?.width || 512));
@@ -1869,14 +1620,15 @@ async function withOfflineDiagnosticStubs(callback) {
       useCurrentSelectionMask: Boolean(opts.useCurrentSelectionMask),
       useSavedSelectionMask: Boolean(opts.useSavedSelectionMask),
       requireMask: Boolean(opts.requireMask),
-      forceFullImageRect: Boolean(opts.forceFullImageRect),
+      pixelExactSelectionPatch: Boolean(opts.pixelExactSelectionPatch),
       boundsMatchSelection: false,
+      nativeAlphaReplacement: false,
       layerBounds: null,
     };
     diagnostics.placeCalls.push(call);
     const result = await originals.placeResultAsLayer(item, selectionInfo, layerName, cropRect, opts);
     if (call.mode === "inpaint" && call.placementMode === "direct-selection-patch") {
-      const placedLayer = app.activeDocument?.activeLayers?.[0] || null;
+      const placedLayer = result?.layer || app.activeDocument?.activeLayers?.[0] || null;
       const bounds = normalizeBounds(placedLayer?.boundsNoEffects || placedLayer?.bounds);
       call.layerBounds = bounds ? {
         left: Math.round(toNumber(bounds.left) || 0),
@@ -1886,10 +1638,13 @@ async function withOfflineDiagnosticStubs(callback) {
         width: Math.round(toNumber(bounds.width) || 0),
         height: Math.round(toNumber(bounds.height) || 0),
       } : null;
-      call.boundsMatchSelection = rectsMatchWithinTolerance(bounds, selectionInfo, 1.5);
+      call.boundsMatchSelection = Boolean(result?.pixelExactSelectionPatch) && (result.expectedVisibleRect
+        ? rectsMatchWithinTolerance(bounds, result.expectedVisibleRect, 1.5)
+        : !bounds || bounds.width === 0 || bounds.height === 0);
+      call.nativeAlphaReplacement = await verifySelectionCompositeAlpha(item, selectionInfo);
       if (!call.boundsMatchSelection) {
         console.warn("[OpenAI Photoshop Generator] direct selection patch layer bounds mismatch", JSON.stringify({
-          expected: selectionInfo || null,
+          expected: result?.expectedVisibleRect || null,
           actual: call.layerBounds,
         }));
       }
@@ -1902,13 +1657,43 @@ async function withOfflineDiagnosticStubs(callback) {
   } finally {
     requestGenerations = originals.requestGenerations;
     requestEdits = originals.requestEdits;
-    requestKoukoutuCutout = originals.requestKoukoutuCutout;
     requestSemanticSplitTargetRegions = originals.requestSemanticSplitTargetRegions;
     requestSemanticSplitLayers = originals.requestSemanticSplitLayers;
     expandCanvasForOutpaint = originals.expandCanvasForOutpaint;
     placeResultAsLayer = originals.placeResultAsLayer;
     saveSettings = originals.saveSettings;
     saveHistoryItem = originals.saveHistoryItem;
+  }
+}
+
+// Real-host diagnostics only: inspect the document composite, not just the
+// inserted layer, to catch source pixels leaking through transparent output.
+async function verifySelectionCompositeAlpha(item, rect) {
+  const expected = await decodePngRgbaBase64(await normalizeImageItemToPngBase64(item));
+  if (expected.width !== rect.width || expected.height !== rect.height) return false;
+  const sample = await imaging.getPixels({
+    documentID: app.activeDocument.id, sourceBounds: {
+      left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
+    }, componentSize: 8, colorSpace: "RGB", applyAlpha: false,
+  });
+  const imageData = sample?.imageData;
+  try {
+    const pixels = imageData ? await imageData.getData({ chunky: true }) : null;
+    const source = sample?.sourceBounds || { left: rect.left, top: rect.top };
+    const components = imageData?.components || 0;
+    const hasAlpha = components === 2 || components === 4;
+    for (let y = 0; y < expected.height; y += 1) {
+      for (let x = 0; x < expected.width; x += 1) {
+        const sx = rect.left + x - source.left;
+        const sy = rect.top + y - source.top;
+        const inSample = pixels && sx >= 0 && sy >= 0 && sx < imageData.width && sy < imageData.height;
+        const actual = !inSample ? 0 : hasAlpha ? pixels[(sy * imageData.width + sx) * components + components - 1] : 255;
+        if (Math.abs(actual - expected.rgba[(y * expected.width + x) * 4 + 3]) > 1) return false;
+      }
+    }
+    return true;
+  } finally {
+    imageData?.dispose();
   }
 }
 
@@ -3595,9 +3380,7 @@ async function requestEdits(settings, prompt, imageB64, maskB64, options = {}) {
 
   for (let index = 0; index < total; index += 1) {
     throwIfCancelled();
-    const routeLabel = isComfyModel(settings.model)
-      ? `${getComfyPresetLabel(settings.model)}`
-      : maskB64 ? "OpenAI 局部编辑" : "OpenAI 参考图编辑";
+    const routeLabel = maskB64 ? "OpenAI 局部编辑" : "OpenAI 参考图编辑";
     setStatus(`正在调用 ${routeLabel} ${index + 1}/${total}...`);
     setProgress(68 + Math.round((index / total) * 14), true);
     const batch = await requestSingleEdit(settings, prompt, imageB64, maskB64, options);
@@ -3609,10 +3392,6 @@ async function requestEdits(settings, prompt, imageB64, maskB64, options = {}) {
 }
 
 async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = {}) {
-  if (isComfyModel(settings.model)) {
-    return requestSingleComfyEdit(settings, prompt, imageB64, maskB64, options);
-  }
-
   if (shouldUseChatGptStyleResponsesEdit(settings, Boolean(maskB64), options)) {
     try {
       setStatus(maskB64
@@ -4033,7 +3812,7 @@ function getResponsesImageToolModel(model) {
 function buildResponsesImageEditPrompt(prompt, hasMask, options = {}) {
   const size = options.size ? `Requested output size: ${options.size}.` : "";
   const referenceSize = options.referenceSize ? `Selected Photoshop crop size: ${options.referenceSize}.` : "";
-  const referenceCanvasSize = options.referenceCanvasSize ? `Uploaded white reference canvas size: ${options.referenceCanvasSize}.` : "";
+  const referenceCanvasSize = options.referenceCanvasSize ? `Uploaded reference canvas size: ${options.referenceCanvasSize}.` : "";
   const referenceCropBox = options.referenceCropBox ? `Selected crop box inside uploaded canvas: ${options.referenceCropBox}.` : "";
   if (!hasMask && options.manualReferenceEdit) {
     return [
@@ -4252,404 +4031,6 @@ function normalizeImageBackground(background) {
   return "";
 }
 
-async function requestKoukoutuCutout(settings, imageB64) {
-  const imageBytes = estimateBase64Bytes(imageB64);
-  if (imageBytes > 40 * 1024 * 1024) {
-    throw new Error(`抠抠图上传图片过大：${formatBytes(imageBytes)}，请缩小选区或画布后重试`);
-  }
-
-  const outputFormat = settings.koukoutuFormat === "webp" ? "webp" : "png";
-  const inputFormat = inferImageFormatFromValue(imageB64) || "png";
-  const form = new FormData();
-  form.append("model_key", "background-removal");
-  form.append("image_file", base64ToBlob(imageB64, mimeTypeForFormat(inputFormat)), `photoshop-input.${fileExtensionForFormat(inputFormat)}`);
-  form.append("output_format", outputFormat);
-  // Keep the returned PNG the same size as the exported Photoshop region.
-  // If the API crops to the subject bbox, it does not return the crop offset,
-  // so the layer cannot be placed back at the original canvas coordinates.
-  form.append("crop", "0");
-  form.append("border", String(settings.koukoutuBorder || 0));
-  form.append("stamp_crop", "0");
-  form.append("response", "bytes");
-  await saveDebugJsonFile("cutout-last-koukoutu-request.json", {
-    pluginVersion: PLUGIN_VERSION,
-    route: "koukoutu-cutout",
-    endpointUrl: sanitizeDebugEndpointUrl(KOUKOUTU_SYNC_URL),
-    modelKey: "background-removal",
-    crop: 0,
-    stampCrop: 0,
-    border: Number(settings.koukoutuBorder || 0),
-    response: "bytes",
-    inputBytes: imageBytes,
-    inputFormat,
-    inputSize: getPngDimensionsFromBase64(imageB64) || null,
-    outputFormat,
-    apiKeyPresent: Boolean(settings.koukoutuApiKey),
-  });
-
-  setProgress(64, true);
-  setStatus(`正在上传到抠抠图：${formatBytes(imageBytes)}，输出 ${outputFormat.toUpperCase()}，保持原图尺寸`);
-  const response = await sendRequest(KOUKOUTU_SYNC_URL, {
-    method: "POST",
-    headers: {
-      "X-API-Key": settings.koukoutuApiKey,
-    },
-    body: form,
-    responseType: "arraybuffer",
-    timeoutMs: 180000,
-  }, "抠抠图抠图");
-
-  if (!response.ok) {
-    const detail = await readResponseTextSafe(response);
-    throw new Error(`抠抠图失败：HTTP ${response.status} ${formatKoukoutuError(detail)}`);
-  }
-
-  setProgress(82, true);
-  setStatus("抠抠图已返回透明图，正在准备导入...");
-  const buffer = await response.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  if (!bytes.length) {
-    throw new Error("抠抠图返回为空");
-  }
-  const actualFormat = inferImageFormatFromBytes(bytes) || outputFormat;
-  const outputB64 = arrayBufferToBase64(buffer);
-  await saveDebugBase64Image(`cutout-last-koukoutu-output.${actualFormat}`, outputB64);
-  return {
-    b64: outputB64,
-    importB64: outputB64,
-    format: actualFormat,
-  };
-}
-
-async function normalizeCutoutResultItem(item, cutout) {
-  const targetSize = {
-    width: Math.max(1, Math.round(toNumber(cutout?.placementRect?.width) || 1)),
-    height: Math.max(1, Math.round(toNumber(cutout?.placementRect?.height) || 1)),
-  };
-  const normalized = await normalizePlacementSizedResultItem(item, targetSize, "抠图结果");
-  return normalized.item;
-}
-
-async function requestSingleComfyEdit(settings, prompt, imageB64, maskB64, options = {}) {
-  if (!imageB64 || !maskB64) {
-    throw new Error("ComfyUI 预设目前只接局部重绘/局部补丁流程，请先选择需要编辑的区域。");
-  }
-
-  const preset = getComfyWorkflowPreset(settings.model);
-  if (!preset) {
-    throw new Error(`${getComfyPresetLabel(settings.model)} 还没有绑定 workflow JSON。`);
-  }
-
-  const statsResponse = await sendRequest(buildComfyUrl(settings.comfyUrl, "/system_stats"), {
-    method: "GET",
-  }, "ComfyUI 状态检查");
-  if (!statsResponse.ok) {
-    throw new Error(`ComfyUI 不可用：HTTP ${statsResponse.status}`);
-  }
-
-  const workflow = await loadComfyWorkflow(preset);
-  setProgress(60, true);
-  setStatus(`正在准备 ${preset.label} 输入图和编辑 mask...`);
-  const maskedInputB64 = await createComfyMaskInputBase64(imageB64, maskB64);
-  await saveDebugBase64Image("comfy-last-mask-input.png", maskedInputB64);
-
-  const runId = `${Date.now()}_${Math.floor(Math.random() * 100000)}`;
-  setProgress(62, true);
-  setStatus(`正在上传 ${preset.label} 输入到 ComfyUI...`);
-  const uploadName = await uploadComfyImage(
-    settings,
-    maskedInputB64,
-    `${preset.prefix}_${runId}_input.png`,
-  );
-  const preparedWorkflow = prepareComfyWorkflow(workflow, {
-    imageName: uploadName,
-    prompt,
-    seed: createRandomSeed(),
-    prefix: `${preset.prefix}_${runId}`,
-  });
-
-  setProgress(64, true);
-  setStatus(`正在提交 ${preset.label} workflow...`);
-  const promptId = await queueComfyWorkflow(settings, preparedWorkflow);
-  setProgress(72, true);
-  setStatus(`正在等待 ${preset.label} 输出...`);
-  const imageRef = await waitForComfyOutput(settings, promptId);
-  setProgress(84, true);
-  setStatus("正在下载 ComfyUI 输出图...");
-  const outputB64 = await downloadComfyImage(settings, imageRef);
-  return [{ b64: outputB64, format: "png" }];
-}
-
-async function requestGptImage2AlphaComfy(settings, prompt, image1B64, image2B64, options = {}) {
-  if (!image1B64 || !image2B64) {
-    throw new Error("GPT Image2 Alpha 需要图一和图二：图一来自当前 Photoshop 画布/选区，图二请先点“选择图二”。");
-  }
-  if (!settings.apiKey) {
-    throw new Error("请先在设置里填写 OpenAI API Key；插件会把它传给外部 ComfyUI 的 GPT Image2 节点，不会写死到 workflow 文件里。");
-  }
-
-  const preset = GPT_IMAGE2_ALPHA_WORKFLOW;
-  const statsResponse = await sendRequest(buildComfyUrl(settings.comfyUrl, "/system_stats"), {
-    method: "GET",
-  }, "ComfyUI 状态检查");
-  if (!statsResponse.ok) {
-    throw new Error(`外部 ComfyUI 不可用：HTTP ${statsResponse.status}。插件不会内置 ComfyUI，请先打开你自己的 ComfyUI 服务。`);
-  }
-
-  const workflow = await loadComfyWorkflow(preset);
-  const runId = `${Date.now()}_${Math.floor(Math.random() * 100000)}`;
-  setProgress(56, true);
-  setStatus("正在上传图一到外部 ComfyUI...");
-  const image1Name = await uploadComfyImage(settings, image1B64, `${preset.prefix}_${runId}_image1.png`);
-  setProgress(60, true);
-  setStatus("正在上传图二风格参考到外部 ComfyUI...");
-  const image2Name = await uploadComfyImage(settings, image2B64, `${preset.prefix}_${runId}_image2.png`);
-  const prefix = `${preset.prefix}_${runId}`;
-  const preparedWorkflow = prepareGptImage2AlphaWorkflow(workflow, {
-    image1Name,
-    image2Name,
-    prompt,
-    apiKey: settings.apiKey,
-    seed: createRandomSeed(),
-    prefix,
-  });
-
-  await saveDebugJsonFile("comfy-gpt-image2-alpha-request.json", {
-    pluginVersion: PLUGIN_VERSION,
-    route: "external-comfy-gpt-image2-alpha",
-    comfyUrl: sanitizeDebugEndpointUrl(settings.comfyUrl),
-    workflowFile: preset.file,
-    workflowLabel: preset.label,
-    image1Bytes: estimateBase64Bytes(image1B64),
-    image2Bytes: estimateBase64Bytes(image2B64),
-    sourceSize: options.sourceSize || null,
-    styleReferenceName: options.styleReferenceName || null,
-    promptLength: String(prompt || "").length,
-    apiKeyPresent: Boolean(settings.apiKey),
-    bundledComfyUI: false,
-  });
-
-  setProgress(64, true);
-  setStatus("正在提交外部 ComfyUI GPT Image2 Alpha workflow...");
-  const promptId = await queueComfyWorkflow(settings, preparedWorkflow);
-  setProgress(72, true);
-  setStatus("正在等待外部 ComfyUI 输出透明 PNG...");
-  const imageRef = await waitForComfyOutput(settings, promptId);
-  setProgress(84, true);
-  setStatus("正在下载外部 ComfyUI Alpha 输出图...");
-  const outputB64 = await downloadComfyImage(settings, imageRef);
-  await saveDebugBase64Image("comfy-gpt-image2-alpha-output.png", outputB64);
-  return [{ b64: outputB64, importB64: outputB64, format: "png" }];
-}
-
-async function requestComfyCutout(settings, prompt, imageB64) {
-  const statsResponse = await sendRequest(buildComfyUrl(settings.comfyUrl, "/system_stats"), {
-    method: "GET",
-  }, "ComfyUI 状态检查");
-  if (!statsResponse.ok) {
-    throw new Error(`ComfyUI 不可用：HTTP ${statsResponse.status}`);
-  }
-
-  setProgress(62, true);
-  setStatus("正在上传抠图输入到 ComfyUI...");
-  const runId = `${Date.now()}_${Math.floor(Math.random() * 100000)}`;
-  const uploadName = await uploadComfyImage(
-    settings,
-    imageB64,
-    `codex_ps_cutout_${runId}_input.png`,
-  );
-  const prefix = `codex_ps_cutout_${runId}`;
-  const workflow = buildComfyCutoutWorkflow(uploadName, prompt, prefix);
-
-  setProgress(68, true);
-  setStatus("正在提交 ComfyUI 抠图 workflow...");
-  const promptId = await queueComfyWorkflow(settings, workflow);
-  setProgress(74, true);
-  setStatus("正在等待 ComfyUI 抠图输出...");
-  const imageRef = await waitForComfyOutput(settings, promptId);
-  setProgress(84, true);
-  setStatus("正在下载 ComfyUI 抠图 PNG...");
-  const outputB64 = await downloadComfyImage(settings, imageRef);
-  await saveDebugBase64Image("cutout-last-comfy-output.png", outputB64);
-  return {
-    b64: outputB64,
-    importB64: outputB64,
-    format: "png",
-  };
-}
-
-async function resolveCutoutPrompt(settings, prompt, imageB64) {
-  const profile = await analyzeCutoutImageProfile(imageB64);
-  const manualPrompt = hasManualCutoutPrompt(prompt);
-
-  if (manualPrompt) {
-    return prompt;
-  }
-
-  if (profile.hasUsefulAlpha) {
-    setStatus("已识别到透明通道：使用原始 alpha 抠图...");
-    return "alpha 透明通道，直接保留原图已有透明边缘";
-  }
-
-  const gptPlan = await requestGptCutoutPlan(settings, imageB64, profile);
-  if (gptPlan?.prompt) {
-    setStatus(`GPT 抠图策略：${gptPlan.prompt}`);
-    return gptPlan.prompt;
-  }
-
-  const fallbackPrompt = getFallbackCutoutPrompt(profile);
-  setStatus(`自动抠图策略：${fallbackPrompt}`);
-  return fallbackPrompt;
-}
-
-function hasManualCutoutPrompt(prompt) {
-  const firstLine = String(prompt || "").trim().split(/\n/)[0].trim().toLowerCase();
-  return Boolean(firstLine && firstLine !== "auto" && firstLine !== "自动");
-}
-
-async function analyzeCutoutImageProfile(imageB64) {
-  const source = await loadImage(toDataUrl(imageB64, inferImageFormatFromValue(imageB64) || "png"));
-  const sourceWidth = source.naturalWidth || source.width;
-  const sourceHeight = source.naturalHeight || source.height;
-  const maxSide = 512;
-  const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
-  const width = Math.max(1, Math.round(sourceWidth * scale));
-  const height = Math.max(1, Math.round(sourceHeight * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(source, 0, 0, width, height);
-  const pixels = ctx.getImageData(0, 0, width, height).data;
-  let transparent = 0;
-  let semitransparent = 0;
-  let edgeCount = 0;
-  let edgeR = 0;
-  let edgeG = 0;
-  let edgeB = 0;
-  const edgeBand = Math.max(2, Math.round(Math.min(width, height) * 0.04));
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const index = (y * width + x) * 4;
-      const alpha = pixels[index + 3];
-      if (alpha < 8) transparent += 1;
-      if (alpha > 8 && alpha < 245) semitransparent += 1;
-      if (x < edgeBand || y < edgeBand || x >= width - edgeBand || y >= height - edgeBand) {
-        edgeR += pixels[index];
-        edgeG += pixels[index + 1];
-        edgeB += pixels[index + 2];
-        edgeCount += 1;
-      }
-    }
-  }
-
-  const total = Math.max(1, width * height);
-  const avgR = edgeCount ? edgeR / edgeCount : 255;
-  const avgG = edgeCount ? edgeG / edgeCount : 255;
-  const avgB = edgeCount ? edgeB / edgeCount : 255;
-  const brightness = (avgR + avgG + avgB) / 3;
-  const spread = Math.max(avgR, avgG, avgB) - Math.min(avgR, avgG, avgB);
-
-  return {
-    width: sourceWidth,
-    height: sourceHeight,
-    transparentRatio: transparent / total,
-    semitransparentRatio: semitransparent / total,
-    hasUsefulAlpha: transparent / total > 0.005 || semitransparent / total > 0.005,
-    edgeBrightness: brightness,
-    edgeColorSpread: spread,
-    edgeIsWhite: brightness > 232 && spread < 28,
-    edgeIsBlack: brightness < 42 && spread < 42,
-  };
-}
-
-async function requestGptCutoutPlan(settings, imageB64, profile) {
-  if (!settings.apiKey || !settings.baseUrl) {
-    return null;
-  }
-
-  setProgress(48, true);
-  setStatus("正在用 GPT 识别抠图策略...");
-  const schema = {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      strategy: {
-        type: "string",
-        enum: [
-          "source_alpha",
-          "rmbg_subject",
-          "white_background_subject",
-          "black_background_effect",
-          "blue_effect",
-          "red_or_fire_effect",
-          "green_effect",
-        ],
-      },
-      prompt: { type: "string" },
-      confidence: { type: "number" },
-      reason: { type: "string" },
-    },
-    required: ["strategy", "prompt", "confidence", "reason"],
-  };
-  const payload = {
-    model: DEFAULT_CUTOUT_ANALYSIS_MODEL,
-    input: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: [
-              "Analyze this Photoshop cutout input and return JSON only.",
-              "Choose the best transparent PNG extraction strategy for ComfyUI.",
-              "Use source_alpha only if the image already contains meaningful transparency.",
-              "Use rmbg/subject strategies for opaque white or clean studio backgrounds with characters, props, monsters, weapons, or objects.",
-              "Use color/effect strategies only for glow, fire, lightning, smoke, or magic effects on a dark background.",
-              `Local pixel hints: ${JSON.stringify(profile)}`,
-            ].join("\n"),
-          },
-          {
-            type: "input_image",
-            image_url: toDataUrl(imageB64, inferImageFormatFromValue(imageB64) || "png"),
-            detail: "low",
-          },
-        ],
-      },
-    ],
-    text: {
-      format: {
-        type: "json_schema",
-        name: "cutout_strategy",
-        strict: true,
-        schema,
-      },
-    },
-  };
-
-  try {
-    const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${settings.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    }, "GPT 抠图策略识别");
-    if (!response.ok) return null;
-    const json = parseResponsesJsonText(await response.text());
-    const plan = parseGptCutoutPlan(json);
-    return plan ? normalizeGptCutoutPlan(plan, profile) : null;
-  } catch (error) {
-    console.warn("GPT cutout analysis failed", error);
-    return null;
-  }
-}
-
-function parseGptCutoutPlan(json) {
-  return parseJsonFromResponseOutput(json);
-}
 
 function parseResponsesJsonText(text) {
   const raw = String(text || "").trim();
@@ -4855,532 +4236,6 @@ function collectResponsesSseOutputText(eventsOrLines) {
   return chunks.join("").trim();
 }
 
-function normalizeGptCutoutPlan(plan, profile) {
-  if (!plan || typeof plan !== "object") return null;
-  if (plan.strategy === "source_alpha" && !profile.hasUsefulAlpha) {
-    return { ...plan, prompt: getFallbackCutoutPrompt(profile) };
-  }
-  const map = {
-    source_alpha: "alpha 透明通道，直接保留原图已有透明边缘",
-    rmbg_subject: "rmbg 主体抠图，保留角色/物体，移除背景",
-    white_background_subject: "rmbg 白底主体抠图，保留角色/物体，移除白色背景",
-    black_background_effect: "黑底光效抠图，保留亮部和半透明边缘",
-    blue_effect: "蓝色电光/冰晶特效抠图，保留蓝色亮部和半透明边缘",
-    red_or_fire_effect: "火焰/红色光效抠图，保留暖色亮部和半透明边缘",
-    green_effect: "绿色光效抠图，保留绿色亮部和半透明边缘",
-  };
-  return { ...plan, prompt: map[plan.strategy] || plan.prompt || getFallbackCutoutPrompt(profile) };
-}
-
-function getFallbackCutoutPrompt(profile) {
-  if (profile.hasUsefulAlpha) return "alpha 透明通道，直接保留原图已有透明边缘";
-  if (profile.edgeIsBlack) return "黑底光效抠图，保留亮部和半透明边缘";
-  return "rmbg 主体抠图，保留角色/物体，移除背景";
-}
-
-function buildComfyCutoutWorkflow(imageName, prompt, prefix) {
-  if (shouldUseRmbgCutout(prompt)) {
-    return {
-      "1": {
-        class_type: "LoadImage",
-        inputs: {
-          image: imageName,
-        },
-      },
-      "2": {
-        class_type: "RMBG",
-        inputs: {
-          image: ["1", 0],
-          model: "RMBG-2.0",
-          sensitivity: 0.9,
-          process_res: 1536,
-          mask_blur: 1,
-          mask_offset: 0,
-          invert_output: false,
-          refine_foreground: true,
-          background: "Alpha",
-          background_color: "#00000000",
-        },
-      },
-      "3": {
-        class_type: "SaveImageWithAlpha",
-        inputs: {
-          images: ["2", 0],
-          mask: ["2", 1],
-          filename_prefix: prefix,
-        },
-      },
-    };
-  }
-
-  const channel = getComfyCutoutChannel(prompt);
-  const invert = shouldInvertComfyCutoutMask(prompt);
-  const useSourceAlpha = channel === "source_alpha";
-  const saveMaskInput = useSourceAlpha ? ["1", 1] : invert ? ["3", 0] : ["2", 0];
-  const workflow = {
-    "1": {
-      class_type: "LoadImage",
-      inputs: {
-        image: imageName,
-      },
-    },
-    "4": {
-      class_type: "SaveImageWithAlpha",
-      inputs: {
-        images: ["1", 0],
-        mask: saveMaskInput,
-        filename_prefix: prefix,
-      },
-    },
-  };
-
-  if (!useSourceAlpha) {
-    workflow["2"] = {
-      class_type: "ImageToMask",
-      inputs: {
-        image: ["1", 0],
-        channel,
-      },
-    };
-  }
-
-  if (!useSourceAlpha && invert) {
-    workflow["3"] = {
-      class_type: "InvertMask",
-      inputs: {
-        mask: ["2", 0],
-      },
-    };
-  }
-
-  return workflow;
-}
-
-function shouldUseRmbgCutout(prompt) {
-  const value = String(prompt || "").toLowerCase();
-  if (/黑底|black|光效|glow|火|flame|fire|电|雷|lightning|electric|magic/.test(value)) {
-    return false;
-  }
-  return /rmbg|remove background|主体|角色|物体|怪物|武器|白底|white|background removal|subject|character|object/.test(value);
-}
-
-function getComfyCutoutChannel(prompt) {
-  const value = String(prompt || "").toLowerCase();
-  if (/透明通道|alpha|source_alpha/.test(value)) return "source_alpha";
-  if (/红|red/.test(value)) return "red";
-  if (/蓝|电|雷|lightning|electric|blue|cyan/.test(value)) return "blue";
-  if (/绿|green/.test(value)) return "green";
-  if (/黑底|black|光效|glow|火|flame|fire|magic/.test(value)) return "red";
-  return "red";
-}
-
-function shouldInvertComfyCutoutMask(prompt) {
-  const value = String(prompt || "").toLowerCase();
-  if (/黑底|black|光效|glow|火|flame|fire|电|lightning|magic|透明通道|alpha/.test(value)) {
-    return false;
-  }
-  if (/白底|white|背景白|remove white/.test(value)) {
-    return true;
-  }
-  return false;
-}
-
-async function loadComfyWorkflow(preset) {
-  const pluginFolder = await fs.getPluginFolder();
-  const workflowFolder = await pluginFolder.getEntry("comfyui-workflows");
-  const workflowFile = await workflowFolder.getEntry(preset.file);
-  const text = await workflowFile.read();
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    throw new Error(`workflow JSON 解析失败：${preset.file}`);
-  }
-}
-
-async function uploadComfyImage(settings, b64, fileName) {
-  const imageFormat = inferImageFormatFromValue(b64) || "png";
-  const form = new FormData();
-  form.append("image", base64ToBlob(b64, mimeTypeForFormat(imageFormat)), withImageFileExtension(fileName, imageFormat));
-  form.append("type", "input");
-  form.append("overwrite", "true");
-
-  const response = await sendRequest(buildComfyUrl(settings.comfyUrl, "/upload/image"), {
-    method: "POST",
-    body: form,
-  }, "上传 ComfyUI 输入图");
-  const text = await response.text();
-  let json = {};
-  try {
-    json = JSON.parse(text || "{}");
-  } catch (error) {
-    throw new Error(`ComfyUI 上传返回异常：${text.slice(0, 200)}`);
-  }
-  if (!response.ok) {
-    throw new Error(`ComfyUI 上传失败：HTTP ${response.status} ${json?.error || text}`);
-  }
-  const name = json.name || fileName;
-  return json.subfolder ? `${json.subfolder}/${name}` : name;
-}
-
-function prepareComfyWorkflow(workflow, { imageName, prompt, seed, prefix }) {
-  const next = JSON.parse(JSON.stringify(workflow));
-  const clipTextNodes = [];
-
-  Object.entries(next).forEach(([nodeId, node]) => {
-    const inputs = node.inputs || {};
-    if (node.class_type === "LoadImage" && Object.prototype.hasOwnProperty.call(inputs, "image")) {
-      inputs.image = imageName;
-    }
-    if (node.class_type === "CLIPTextEncode") {
-      clipTextNodes.push([nodeId, node]);
-    }
-    if (node.class_type === "KSampler" && Object.prototype.hasOwnProperty.call(inputs, "seed")) {
-      inputs.seed = seed;
-    }
-    if (node.class_type === "SaveImage" && Object.prototype.hasOwnProperty.call(inputs, "filename_prefix")) {
-      inputs.filename_prefix = prefix;
-    }
-  });
-
-  clipTextNodes.sort(([left], [right]) => Number(left) - Number(right));
-  if (clipTextNodes[0]) {
-    clipTextNodes[0][1].inputs.text = prompt;
-  }
-  if (clipTextNodes[1] && !String(clipTextNodes[1][1].inputs.text || "").trim()) {
-    clipTextNodes[1][1].inputs.text = "";
-  }
-
-  return next;
-}
-
-function prepareGptImage2AlphaWorkflow(workflow, { image1Name, image2Name, prompt, apiKey, seed, prefix }) {
-  const next = JSON.parse(JSON.stringify(workflow));
-  setComfyNodeInput(next, "24", "image", image1Name);
-  setComfyNodeInput(next, "2", "image", image2Name);
-  setComfyNodeInput(next, "17", "text", String(prompt || DEFAULT_GPT_IMAGE2_ALPHA_PROMPT).trim() || DEFAULT_GPT_IMAGE2_ALPHA_PROMPT);
-  setComfyNodeInput(next, "16", "text", GPT_IMAGE2_ALPHA_FIXED_BACKGROUND_PROMPT);
-  setComfyNodeInput(next, "14", "apikey", apiKey);
-  setComfyNodeInput(next, "25", "model", "gpt-image-2");
-  setComfyNodeInput(next, "25", "size", "1024x1024（1K 1:1）");
-  setComfyNodeInput(next, "25", "response_format", "b64_json");
-  setComfyNodeInput(next, "25", "seed", seed);
-  setComfyNodeInput(next, "19", "upscale_method", "lanczos");
-  setComfyNodeInput(next, "19", "width", 0);
-  setComfyNodeInput(next, "19", "height", 3840);
-  setComfyNodeInput(next, "19", "crop", "disabled");
-  setComfyNodeInput(next, "23", "background_color", "128,128,128");
-  setComfyNodeInput(next, "23", "tolerance", 0.055);
-  setComfyNodeInput(next, "23", "softness", 0.08);
-  setComfyNodeInput(next, "23", "edge_contract_px", 1);
-  setComfyNodeInput(next, "23", "feather_radius", 1);
-  setComfyNodeInput(next, "23", "decontaminate_edge", true);
-  setComfyNodeInput(next, "23", "refine_scale", 2);
-  setComfyNodeInput(next, "23", "background_mode", "transparent");
-  setComfyNodeInput(next, "23", "background_preset", "gray");
-  setComfyNodeInput(next, "20", "filename_prefix", prefix);
-  return next;
-}
-
-function setComfyNodeInput(workflow, nodeId, inputName, value) {
-  const node = workflow?.[nodeId];
-  if (!node || typeof node !== "object") {
-    throw new Error(`workflow 缺少节点 ${nodeId}`);
-  }
-  node.inputs = node.inputs && typeof node.inputs === "object" ? node.inputs : {};
-  node.inputs[inputName] = value;
-}
-
-async function queueComfyWorkflow(settings, workflow) {
-  const body = JSON.stringify({
-    client_id: createComfyClientId(),
-    prompt: workflow,
-  });
-  const response = await sendRequest(buildComfyUrl(settings.comfyUrl, "/prompt"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body,
-  }, "提交 ComfyUI workflow");
-  const text = await response.text();
-  let json = {};
-  try {
-    json = JSON.parse(text || "{}");
-  } catch (error) {
-    throw new Error(`ComfyUI 提交返回异常：${text.slice(0, 300)}`);
-  }
-  const nodeErrors = json.node_errors && Object.keys(json.node_errors).length
-    ? json.node_errors
-    : null;
-  if (!response.ok || json.error || nodeErrors) {
-    throw new Error(`ComfyUI workflow 提交失败：${json?.error?.message || JSON.stringify(nodeErrors || json).slice(0, 500)}`);
-  }
-  if (!json.prompt_id) {
-    throw new Error(`ComfyUI 未返回 prompt_id：${text.slice(0, 300)}`);
-  }
-  return json.prompt_id;
-}
-
-async function waitForComfyOutput(settings, promptId) {
-  const startedAt = Date.now();
-  const timeoutMs = 12 * 60 * 1000;
-  while (Date.now() - startedAt < timeoutMs) {
-    const elapsedRatio = Math.max(0, Math.min(1, (Date.now() - startedAt) / timeoutMs));
-    setProgress(72 + Math.round(elapsedRatio * 10), true);
-    const response = await sendRequest(buildComfyUrl(settings.comfyUrl, `/history/${encodeURIComponent(promptId)}`), {
-      method: "GET",
-    }, "读取 ComfyUI history");
-    const text = await response.text();
-    if (response.ok && text) {
-      let json = {};
-      try {
-        json = JSON.parse(text);
-      } catch (error) {
-        json = {};
-      }
-      const record = json[promptId] || json;
-      const imageRef = findComfyOutputImage(record?.outputs);
-      if (imageRef) {
-        return imageRef;
-      }
-      if (record?.status?.status_str === "error") {
-        throw new Error(`ComfyUI 生成失败：${record?.status?.messages?.slice?.(-1)?.[0] || "unknown error"}`);
-      }
-    }
-    await sleep(1200);
-  }
-  throw new Error("等待 ComfyUI 输出超时");
-}
-
-function findComfyOutputImage(outputs) {
-  if (!outputs || typeof outputs !== "object") return null;
-  for (const output of Object.values(outputs)) {
-    const images = output?.images || [];
-    if (images.length) {
-      return images[0];
-    }
-  }
-  return null;
-}
-
-async function downloadComfyImage(settings, imageRef) {
-  const params = new URLSearchParams();
-  params.set("filename", imageRef.filename || "");
-  params.set("subfolder", imageRef.subfolder || "");
-  params.set("type", imageRef.type || "output");
-  const response = await sendRequest(buildComfyUrl(settings.comfyUrl, `/view?${params.toString()}`), {
-    method: "GET",
-    responseType: "arraybuffer",
-  }, "下载 ComfyUI 输出图");
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`下载 ComfyUI 输出图失败：HTTP ${response.status} ${detail.slice(0, 200)}`);
-  }
-  return arrayBufferToBase64(await response.arrayBuffer());
-}
-
-async function createComfyMaskInputBase64(originalB64, maskB64) {
-  const original = await loadImage(toDataUrl(originalB64, inferImageFormatFromValue(originalB64) || "png"));
-  const mask = await loadImage(toDataUrl(maskB64, inferImageFormatFromValue(maskB64) || "png"));
-  const width = original.naturalWidth || original.width;
-  const height = original.naturalHeight || original.height;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(original, 0, 0, width, height);
-  const imageData = ctx.getImageData(0, 0, width, height);
-
-  const maskCanvas = document.createElement("canvas");
-  maskCanvas.width = width;
-  maskCanvas.height = height;
-  const maskCtx = maskCanvas.getContext("2d");
-  maskCtx.drawImage(mask, 0, 0, width, height);
-  const maskData = maskCtx.getImageData(0, 0, width, height).data;
-
-  for (let index = 0; index < imageData.data.length; index += 4) {
-    imageData.data[index + 3] = maskData[index + 3];
-  }
-
-  ctx.putImageData(imageData, 0, 0);
-  return canvasToBase64(canvas);
-}
-
-async function createCutoutInputs() {
-  if (!app.activeDocument) {
-    throw new Error("当前没有打开的 Photoshop 文档");
-  }
-
-  const selection = await getSelectionInfo();
-  const docSize = getDocumentSize();
-  const placementRect = isSelectionValid(selection)
-    ? roundRectToPixels(clampRectToDocument(cloneRect(selection), docSize))
-    : { left: 0, top: 0, right: docSize.width, bottom: docSize.height, width: docSize.width, height: docSize.height };
-  const image = isSelectionValid(selection)
-    ? await exportDocumentRegionAsBase64(placementRect)
-    : await exportActiveDocumentAsBase64();
-  await saveDebugBase64Image("cutout-last-input.png", image);
-
-  return {
-    image,
-    placementRect,
-    targetRect: placementRect,
-    displaySize: `${placementRect.width}x${placementRect.height}`,
-  };
-}
-
-async function createGptImage2AlphaInputs(selection, docSize) {
-  if (!app.activeDocument) {
-    throw new Error("当前没有打开的 Photoshop 文档");
-  }
-
-  const placementRect = isSelectionValid(selection)
-    ? roundRectToPixels(clampRectToDocument(cloneRect(selection), docSize))
-    : { left: 0, top: 0, right: docSize.width, bottom: docSize.height, width: docSize.width, height: docSize.height };
-  const image = isSelectionValid(selection)
-    ? await exportDocumentRegionAsBase64(placementRect)
-    : await exportActiveDocumentAsBase64();
-  await saveDebugBase64Image("comfy-gpt-image2-alpha-image1.png", image);
-
-  return {
-    image,
-    placementRect,
-    targetRect: placementRect,
-    displaySize: `${placementRect.width}x${placementRect.height}`,
-  };
-}
-
-async function createEffectCutoutItem(imageB64, prompt) {
-  const cutoutB64 = await createEffectCutoutBase64(imageB64, prompt);
-  await saveDebugBase64Image("cutout-last-output.png", cutoutB64);
-  return {
-    b64: cutoutB64,
-    importB64: cutoutB64,
-    format: "png",
-  };
-}
-
-async function createEffectCutoutBase64(imageB64, prompt) {
-  setProgress(60, true);
-  setStatus("正在读取像素...");
-  const source = await loadImage(toDataUrl(imageB64, inferImageFormatFromValue(imageB64) || "png"));
-  const width = source.naturalWidth || source.width;
-  const height = source.naturalHeight || source.height;
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(source, 0, 0, width, height);
-  const image = ctx.getImageData(0, 0, width, height);
-  const data = image.data;
-  const mode = getCutoutMode(prompt);
-  setProgress(66, true);
-  setStatus("正在分析背景和抠图类型...");
-  const profile = getCutoutBackgroundProfile(data, width, height);
-  const alphaScale = getCutoutAlphaScale(prompt);
-
-  setProgress(70, true);
-  setStatus("正在计算透明通道...");
-  for (let index = 0; index < data.length; index += 4) {
-    const sourceAlpha = data[index + 3];
-    const extractedAlpha = calculateEffectAlpha(
-      data[index],
-      data[index + 1],
-      data[index + 2],
-      sourceAlpha,
-      mode,
-      profile,
-      alphaScale,
-    );
-    data[index + 3] = extractedAlpha;
-  }
-
-  setProgress(80, true);
-  setStatus("正在编码透明 PNG...");
-  return bytesToBase64(encodePngRgba(width, height, data));
-}
-
-function getCutoutMode(prompt) {
-  const value = String(prompt || "").toLowerCase();
-  if (/火|flame|fire|warm|orange|yellow|red/.test(value)) return "fire";
-  if (/蓝|电|雷|lightning|electric|blue|cyan/.test(value)) return "blue";
-  if (/紫|magic|purple|violet/.test(value)) return "purple";
-  if (/烟|雾|smoke|fog|mist|gray|grey/.test(value)) return "smoke";
-  if (/黑底|black/.test(value)) return "black";
-  if (/白底|white/.test(value)) return "white";
-  return "auto";
-}
-
-function getCutoutAlphaScale(prompt) {
-  const value = String(prompt || "").toLowerCase();
-  if (/半透|透明|translucent|transparent|soft/.test(value)) return 0.62;
-  if (/更透|lighter|thin/.test(value)) return 0.45;
-  if (/实|solid|opaque/.test(value)) return 1.15;
-  return 0.9;
-}
-
-function getCutoutBackgroundProfile(data, width, height) {
-  const samples = [];
-  const sampleSize = Math.max(4, Math.min(24, Math.floor(Math.min(width, height) * 0.08)));
-  const corners = [
-    [0, 0],
-    [width - sampleSize, 0],
-    [0, height - sampleSize],
-    [width - sampleSize, height - sampleSize],
-  ];
-  for (const [startX, startY] of corners) {
-    for (let y = 0; y < sampleSize; y += 1) {
-      for (let x = 0; x < sampleSize; x += 1) {
-        const px = Math.max(0, Math.min(width - 1, startX + x));
-        const py = Math.max(0, Math.min(height - 1, startY + y));
-        const offset = (py * width + px) * 4;
-        samples.push((data[offset] + data[offset + 1] + data[offset + 2]) / 3);
-      }
-    }
-  }
-  const average = samples.reduce((sum, value) => sum + value, 0) / Math.max(1, samples.length);
-  return {
-    brightness: average,
-    mode: average < 72 ? "black" : average > 184 ? "white" : "mixed",
-  };
-}
-
-function calculateEffectAlpha(r, g, b, sourceAlpha, mode, profile, alphaScale) {
-  if (sourceAlpha <= 0) return 0;
-  const brightness = Math.max(r, g, b);
-  const darkness = 255 - Math.min(r, g, b);
-  const chroma = brightness - Math.min(r, g, b);
-  let score = 0;
-  const resolvedMode = mode === "auto" ? profile.mode : mode;
-
-  if (resolvedMode === "black") {
-    score = Math.max(0, brightness - 8) + Math.max(0, chroma - 18) * 0.45;
-  } else if (resolvedMode === "white") {
-    score = Math.max(0, darkness - 8) + Math.max(0, chroma - 18) * 0.35;
-  } else if (resolvedMode === "fire") {
-    const warmth = r * 1.15 + g * 0.58 - b * 1.7;
-    score = Math.max(0, warmth - 55) * 0.9 + Math.max(0, chroma - 22) * 0.55 + Math.max(0, r - 115) * 0.25;
-    if (brightness < 70 || r < 65 || b > r * 0.86) score = 0;
-  } else if (resolvedMode === "blue") {
-    const blueScore = b * 1.15 + g * 0.55 - r * 1.2;
-    score = Math.max(0, blueScore - 45) + Math.max(0, chroma - 20) * 0.7;
-  } else if (resolvedMode === "purple") {
-    const purpleScore = r * 0.65 + b * 1.05 - g * 0.8;
-    score = Math.max(0, purpleScore - 55) + Math.max(0, chroma - 22) * 0.6;
-  } else if (resolvedMode === "smoke") {
-    score = profile.mode === "white"
-      ? Math.max(0, 240 - ((r + g + b) / 3))
-      : Math.max(0, ((r + g + b) / 3) - 18);
-    score *= 0.72;
-  } else {
-    score = Math.max(0, Math.abs(((r + g + b) / 3) - profile.brightness) - 12) * 1.4;
-  }
-
-  const extracted = Math.max(0, Math.min(255, score * alphaScale));
-  if (sourceAlpha < 245) {
-    return Math.round(Math.max(extracted, sourceAlpha * alphaScale));
-  }
-  return Math.round(extracted);
-}
 
 async function compositeItemsWithOriginalMask(items, originalB64, maskB64) {
   if (!maskB64) return items;
@@ -5950,18 +4805,6 @@ async function readResponseTextSafe(response) {
   }
 }
 
-function formatKoukoutuError(text) {
-  const raw = String(text || "").trim();
-  if (!raw) return "";
-  try {
-    const json = JSON.parse(raw);
-    const message = json.message || json.msg || json.error || json.detail || raw;
-    return typeof message === "string" ? message : JSON.stringify(message).slice(0, 300);
-  } catch (error) {
-    return raw.slice(0, 300);
-  }
-}
-
 async function sendRequest(url, options = {}, label = "请求") {
   throwIfCancelled();
   const { responseType, timeoutMs = 180000, forceXhr = false, signal: explicitSignal, ...fetchOptions } = options;
@@ -6412,10 +5255,20 @@ function resizeRgbaBilinear(sourceRgba, sourceWidth, sourceHeight, targetWidth, 
       const topRight = (y0 * sourceWidth + x1) * 4;
       const bottomLeft = (y1 * sourceWidth + x0) * 4;
       const bottomRight = (y1 * sourceWidth + x1) * 4;
-      for (let channel = 0; channel < 4; channel += 1) {
-        const topValue = sourceRgba[topLeft + channel] + ((sourceRgba[topRight + channel] - sourceRgba[topLeft + channel]) * fx);
-        const bottomValue = sourceRgba[bottomLeft + channel] + ((sourceRgba[bottomRight + channel] - sourceRgba[bottomLeft + channel]) * fx);
-        output[outputOffset + channel] = Math.round(topValue + ((bottomValue - topValue) * fy));
+      // Interpolate premultiplied color, then convert back to straight RGBA.
+      // RGB under a fully transparent pixel must never tint the visible edge.
+      const a00 = sourceRgba[topLeft + 3] * (1 - fx) * (1 - fy);
+      const a10 = sourceRgba[topRight + 3] * fx * (1 - fy);
+      const a01 = sourceRgba[bottomLeft + 3] * (1 - fx) * fy;
+      const a11 = sourceRgba[bottomRight + 3] * fx * fy;
+      const alpha = a00 + a10 + a01 + a11;
+      output[outputOffset + 3] = Math.round(alpha);
+      if (output[outputOffset + 3] > 0) {
+        for (let channel = 0; channel < 3; channel += 1) {
+          const premultiplied = sourceRgba[topLeft + channel] * a00 + sourceRgba[topRight + channel] * a10
+            + sourceRgba[bottomLeft + channel] * a01 + sourceRgba[bottomRight + channel] * a11;
+          output[outputOffset + channel] = Math.round(premultiplied / alpha);
+        }
       }
     }
   }
@@ -6842,7 +5695,7 @@ async function importSelected() {
     const alphaStylePatch = itemToPlace?.placementMode === "alpha-style-patch";
     await placeResultAsLayer(itemToPlace, placementRect, layerName, needsPostImportMask ? cropRectToPlace : null, {
       fitByImageSize: isMaskedInpaintLayerResult(itemToPlace) || directSelectionPatch || isSplitElement || alphaStylePatch,
-      forceFullImageRect: directSelectionPatch,
+      pixelExactSelectionPatch: directSelectionPatch,
       alignVisibleRect: isMaskedInpaintLayerResult(itemToPlace) || isSplitElement,
       preserveImageAspect: item.mode === "cutout" || item.mode === "outpaint" || item.placementMode === "full-region-patch",
       rasterizeBeforeMask: needsPostImportMask,
@@ -6903,6 +5756,11 @@ function assertDirectSelectionPatchPlacementRatio(item, imageSize, placementRect
 }
 
 async function placeResultAsLayer(item, selectionInfo, layerName, cropRect = null, opts = {}) {
+  // A replacement screenshot is not a smart-object fit operation. Its canvas,
+  // including transparent margins, is already aligned to the captured selection.
+  if (isDirectSelectionPatchResult(item)) {
+    return placeDirectSelectionPatch(item, selectionInfo, layerName);
+  }
   let itemToImport = item;
   if (item?.whiteMatteMask || opts.removeWhiteMatte) {
     try {
@@ -6982,9 +5840,7 @@ async function placeResultAsLayer(item, selectionInfo, layerName, cropRect = nul
 
   if (isSelectionValid(selectionInfo) && importedLayer) {
     if (opts.fitByImageSize) {
-      if (opts.forceFullImageRect) {
-        await transformLayerToRect(importedLayer, selectionInfo);
-      } else if (opts.alignVisibleRect && isSelectionValid(itemToImport.importVisibleRect) && shouldAlignByVisibleBounds(importedLayer, imageSize, itemToImport.importVisibleRect)) {
+      if (opts.alignVisibleRect && isSelectionValid(itemToImport.importVisibleRect) && shouldAlignByVisibleBounds(importedLayer, imageSize, itemToImport.importVisibleRect)) {
         await transformLayerToRect(importedLayer, itemToImport.importVisibleRect);
       } else {
         await transformLayerByImageRect(importedLayer, imageSize, selectionInfo);
@@ -7059,6 +5915,129 @@ async function placeResultAsLayer(item, selectionInfo, layerName, cropRect = nul
 
   if ((opts.removeWhiteMatte || item.whiteMatteMask) && importedLayer) {
     console.log("[split] white matte removed in JS before placement");
+  }
+}
+
+function hasNonOpaquePixels(rgba) {
+  for (let index = 3; index < rgba.length; index += 4) {
+    if (rgba[index] < 255) return true;
+  }
+  return false;
+}
+
+function makeOutsideSelectionMask(docSize, rect) {
+  const width = Math.round(docSize.width);
+  const height = Math.round(docSize.height);
+  const mask = new Uint8Array(width * height).fill(255);
+  for (let y = rect.top; y < rect.bottom; y += 1) {
+    mask.fill(0, y * width + rect.left, y * width + rect.right);
+  }
+  return mask;
+}
+
+async function placeDirectSelectionPatch(item, selectionInfo, layerName) {
+  const targetDocument = app.activeDocument;
+  if (!targetDocument || !isSelectionValid(selectionInfo)) {
+    throw new Error("截图重绘需要打开目标文档和有效的原选区位置");
+  }
+  if (!imaging?.createImageDataFromBuffer || !imaging?.putPixels || !imaging?.putLayerMask) {
+    throw new Error("当前 Photoshop 缺少原生透明像素写入接口，请升级 Photoshop；未修改原图");
+  }
+  const docSize = { width: Math.round(toNumber(targetDocument.width)), height: Math.round(toNumber(targetDocument.height)) };
+  const rect = roundRectToPixels(selectionInfo);
+  if (!isSelectionValid(rect) || rect.left < 0 || rect.top < 0 || rect.right > docSize.width || rect.bottom > docSize.height) {
+    throw new Error("重绘原选区超出当前画布，已停止导入以避免错位");
+  }
+  const png = await normalizeImageItemToPngBase64(item);
+  const normalized = await normalizeScreenshotReferenceResultBase64(png, { sourceWidth: rect.width, sourceHeight: rect.height });
+  const decoded = await decodePngRgbaBase64(normalized.b64);
+  if (decoded.width !== rect.width || decoded.height !== rect.height) {
+    throw new Error("透明补丁尺寸与原选区不一致，未修改原图");
+  }
+  const replacesTransparency = hasNonOpaquePixels(decoded.rgba);
+  const localVisibleRect = getAlphaBounds(decoded.rgba, decoded.width, decoded.height, 0);
+  const expectedVisibleRect = localVisibleRect ? {
+    ...localVisibleRect,
+    left: rect.left + localVisibleRect.left,
+    top: rect.top + localVisibleRect.top,
+    right: rect.left + localVisibleRect.right,
+    bottom: rect.top + localVisibleRect.bottom,
+  } : null;
+  let pixelData = null;
+  let maskData = null;
+  let importedLayer = null;
+  let sourceGroup = null;
+  try {
+    // Prepare buffers before touching the document. UXP converts the image's
+    // sRGB profile to the target document profile when writing the pixel data.
+    pixelData = await imaging.createImageDataFromBuffer(decoded.rgba, {
+      width: decoded.width, height: decoded.height, components: 4,
+      colorSpace: "RGB", colorProfile: "sRGB IEC61966-2.1",
+    });
+    if (replacesTransparency) {
+      maskData = await imaging.createImageDataFromBuffer(makeOutsideSelectionMask(docSize, rect), {
+        width: docSize.width, height: docSize.height, components: 1,
+        colorSpace: "Grayscale", colorProfile: "Gray Gamma 2.2",
+      });
+    }
+    await core.executeAsModal(async (executionContext) => {
+      if (getDocumentId(app.activeDocument) !== getDocumentId(targetDocument)) {
+        throw new Error("当前文档已切换，未把重绘结果写入其他文档");
+      }
+      if (Math.round(toNumber(targetDocument.width)) !== docSize.width || Math.round(toNumber(targetDocument.height)) !== docSize.height) {
+        throw new Error("目标画布尺寸已改变，未写入过期的选区坐标");
+      }
+      if (!executionContext?.hostControl?.suspendHistory || !executionContext?.hostControl?.resumeHistory) {
+        throw new Error("当前 Photoshop 无法保证透明回填失败回滚，未修改原图");
+      }
+      const suspension = await executionContext.hostControl.suspendHistory({
+        documentID: targetDocument.id, name: "OpenAI 透明选区重绘",
+      });
+      try {
+        throwIfCancelled();
+        let sourceLayers = Array.from(targetDocument.layers);
+        if (replacesTransparency && sourceLayers.length) {
+          // A Photoshop Background cannot be grouped. Retain it untouched and
+          // hidden; a normal duplicate supplies identical pixels inside the new
+          // source group. Existing masks, layer order and nested groups survive.
+          const background = sourceLayers.find((layer) => layer.isBackgroundLayer);
+          if (background) {
+            const replacement = background.visible ? await background.duplicate() : null;
+            if (replacement?.isBackgroundLayer) throw new Error("无法安全复制背景图层");
+            sourceLayers = sourceLayers.flatMap((layer) => layer === background ? (replacement ? [replacement] : []) : [layer]);
+            if (replacement) background.visible = false;
+          }
+          if (sourceLayers.length) {
+            sourceGroup = await targetDocument.createLayerGroup({ name: "OpenAI 原图（选区外，原图可恢复）", fromLayers: sourceLayers });
+            sourceGroup.blendMode = constants.BlendMode?.PASSTHROUGH || "passThrough";
+            // The group mask suppresses the WHOLE replaced rectangle, not just
+            // the generated alpha. Otherwise deleted source objects show through.
+            await imaging.putLayerMask({
+              documentID: targetDocument.id, layerID: sourceGroup.id, imageData: maskData,
+              targetBounds: { left: 0, top: 0 }, replace: true, kind: "user",
+            });
+          }
+        }
+        const frontLayer = sourceGroup || Array.from(targetDocument.layers).find((layer) => !layer.isBackgroundLayer);
+        importedLayer = await targetDocument.createPixelLayer({ name: layerName });
+        if (frontLayer) await importedLayer.move(frontLayer, constants.ElementPlacement?.PLACEBEFORE || "placeBefore");
+        await imaging.putPixels({
+          documentID: targetDocument.id, layerID: importedLayer.id, imageData: pixelData,
+          targetBounds: { left: rect.left, top: rect.top }, replace: true,
+        });
+        throwIfCancelled();
+        if (executionContext.isCancelled) throw new Error("已取消透明回填");
+        await executionContext.hostControl.resumeHistory(suspension, true);
+      } catch (error) {
+        // Never fall back to a partially masked source or unsafe alpha overlay.
+        await executionContext.hostControl.resumeHistory(suspension, false);
+        throw error;
+      }
+    }, { commandName: "Place OpenAI transparent selection patch" });
+    return { layer: importedLayer, sourceGroup, expectedVisibleRect, pixelExactSelectionPatch: true, replacesTransparency };
+  } finally {
+    pixelData?.dispose();
+    maskData?.dispose();
   }
 }
 
@@ -7777,17 +6756,14 @@ async function createInpaintInputs(selection, docSize, model) {
   const targetRect = clampRectToDocument(cloneRect(selection), docSize);
   const placementRect = getInpaintPlacementRect(targetRect, docSize, model);
   const apiSize = getImageEditSizeForSelection(placementRect.width, placementRect.height, model);
-  const outputSize = getInpaintOutputSize(placementRect, apiSize, model);
   if (rectsNearlyEqual(placementRect, getFullDocumentRect(docSize))) {
     setStatus(`正在导出整张画布上下文：${placementRect.width}x${placementRect.height}，只允许改选区 ${targetRect.width}x${targetRect.height}`);
-  } else if (outputSize) {
-    setStatus(`正在导出选区上下文：原区域 ${placementRect.width}x${placementRect.height}，压缩到 ${outputSize.width}x${outputSize.height}`);
   } else {
     setStatus(`正在导出选区上下文：${placementRect.width}x${placementRect.height}，只允许改选区 ${targetRect.width}x${targetRect.height}`);
   }
-  const image = await exportDocumentRegionAsBase64(placementRect, outputSize);
+  const image = await exportDocumentRegionAsBase64(placementRect);
   const exportedSize = getPngDimensionsFromBase64(image);
-  const mask = await createSelectionMaskBase64(placementRect, targetRect, exportedSize || outputSize);
+  const mask = await createSelectionMaskBase64(placementRect, targetRect, exportedSize);
   await saveDebugBase64Image("openai-last-inpaint-input.png", image);
   await saveDebugBase64Image("openai-last-inpaint-mask.png", mask);
 
@@ -7888,9 +6864,24 @@ async function assertProtectedScreenshotCropHasContent(b64, referenceCrop, optio
   } catch (error) {
     return;
   }
-  const resultNonWhiteRatio = estimateNonWhiteRgbaRatio(decoded.rgba, decoded.width, decoded.height);
+  const resultNonWhiteRatio = estimateScreenshotContentRatio(decoded.rgba, decoded.width, decoded.height);
   if (resultNonWhiteRatio >= PROTECTED_REPAINT_MIN_RESULT_NON_WHITE_RATIO) return;
   throw new Error("截图重绘结果几乎为空白，但原选区包含受保护内容，已停止导入以避免擦掉用户要求保持不变的对象");
+}
+
+// Transparent screenshots can contain white artwork; RGB white is not an
+// empty background in that case. Keep legacy white detection only for opaque images.
+function findScreenshotContentBounds(rgba, width, height) {
+  return rgba && hasNonOpaquePixels(rgba)
+    ? getAlphaBounds(rgba, width, height, 12)
+    : findNonWhiteRgbaBounds(rgba, width, height);
+}
+
+function estimateScreenshotContentRatio(rgba, width, height) {
+  if (!rgba || !hasNonOpaquePixels(rgba)) return estimateNonWhiteRgbaRatio(rgba, width, height);
+  let visible = 0;
+  for (let index = 3; index < rgba.length; index += 4) if (rgba[index] > 12) visible += 1;
+  return visible / Math.max(1, width * height);
 }
 
 function estimateNonWhiteRgbaRatio(rgba, width, height) {
@@ -7928,23 +6919,6 @@ async function normalizeScreenshotReferenceResultBase64(b64, referenceCrop, opti
     b64: bytesToBase64(encodePngRgba(targetWidth, targetHeight, resized)),
     normalized: sizeMismatch,
   };
-}
-
-function matteRgbaToWhiteOpaque(rgba) {
-  let changed = false;
-  const output = new Uint8Array(rgba.length);
-  for (let index = 0; index < rgba.length; index += 4) {
-    const alphaByte = rgba[index + 3] || 0;
-    const alpha = alphaByte / 255;
-    output[index] = Math.round((rgba[index] || 0) * alpha + 255 * (1 - alpha));
-    output[index + 1] = Math.round((rgba[index + 1] || 0) * alpha + 255 * (1 - alpha));
-    output[index + 2] = Math.round((rgba[index + 2] || 0) * alpha + 255 * (1 - alpha));
-    output[index + 3] = 255;
-    if (alphaByte !== 255 || output[index] !== rgba[index] || output[index + 1] !== rgba[index + 1] || output[index + 2] !== rgba[index + 2]) {
-      changed = true;
-    }
-  }
-  return changed ? output : rgba;
 }
 
 function findNonWhiteRgbaBounds(rgba, width, height) {
@@ -8031,8 +7005,8 @@ async function normalizeImageItemToPngBase64(item) {
 
 async function createPaddedScreenshotReferenceBase64(b64) {
   const decoded = await decodePngRgbaBase64(b64);
-  const sourceNonWhiteRatio = estimateNonWhiteRgbaRatio(decoded.rgba, decoded.width, decoded.height);
-  const sourceContentBounds = findNonWhiteRgbaBounds(decoded.rgba, decoded.width, decoded.height);
+  const sourceNonWhiteRatio = estimateScreenshotContentRatio(decoded.rgba, decoded.width, decoded.height);
+  const sourceContentBounds = findScreenshotContentBounds(decoded.rgba, decoded.width, decoded.height);
   const canvas = getPaddedScreenshotReferenceCanvas(decoded.width, decoded.height);
   const sourceRgba = canvas.width === decoded.width && canvas.height === decoded.height
     ? decoded.rgba
@@ -8269,7 +7243,7 @@ function getScreenshotResultContentAwareFitCrop(decoded, crop, sourceWidth, sour
   let sourceLeft = Math.max(0, Math.floor((resultWidth - sourceWidth) / 2));
   let sourceTop = Math.max(0, Math.floor((resultHeight - sourceHeight) / 2));
   let strategy = "center";
-  const resultContentBounds = findNonWhiteRgbaBounds(decoded?.rgba, resultWidth, resultHeight);
+  const resultContentBounds = findScreenshotContentBounds(decoded?.rgba, resultWidth, resultHeight);
   if (!resultContentBounds) {
     return { left: sourceLeft, top: sourceTop, width: sourceWidth, height: sourceHeight, strategy, resultContentBounds: null };
   }
@@ -8906,32 +7880,6 @@ async function createManualReferenceInputs(settings) {
   };
 }
 
-function getInpaintOutputSize(placementRect, apiSize, model) {
-  if (!isComfyModel(model)) {
-    return null;
-  }
-
-  const sourceWidth = Math.max(1, Math.round(placementRect.width));
-  const sourceHeight = Math.max(1, Math.round(placementRect.height));
-  const pixels = sourceWidth * sourceHeight;
-  const edge = Math.max(sourceWidth, sourceHeight);
-  if (pixels <= COMFY_INPAINT_MAX_PIXELS && edge <= COMFY_INPAINT_MAX_EDGE) {
-    return null;
-  }
-
-  const scale = Math.min(
-    COMFY_INPAINT_MAX_EDGE / edge,
-    Math.sqrt(COMFY_INPAINT_MAX_PIXELS / pixels),
-  );
-  return normalizeFlexibleImageSize(sourceWidth * scale, sourceHeight * scale, {
-    multiple: 16,
-    minPixels: 256 * 256,
-    maxPixels: COMFY_INPAINT_MAX_PIXELS,
-    maxEdge: COMFY_INPAINT_MAX_EDGE,
-    maxRatio: 8,
-  });
-}
-
 function getInpaintPlacementRect(targetRect, docSize, model) {
   if (shouldUseFullCanvasInpaintContext(model, docSize)) {
     return getFullDocumentRect(docSize);
@@ -8947,7 +7895,7 @@ function getInpaintPlacementRect(targetRect, docSize, model) {
 }
 
 function shouldUseFullCanvasInpaintContext(model, docSize) {
-  if (isComfyModel(model) || /dall-e-2/i.test(String(model || ""))) return false;
+  if (/dall-e-2/i.test(String(model || ""))) return false;
   const width = Math.max(1, Math.round(toNumber(docSize?.width) || 1));
   const height = Math.max(1, Math.round(toNumber(docSize?.height) || 1));
   return width * height <= OPENAI_INPAINT_FULL_CANVAS_MAX_PIXELS;
@@ -9177,7 +8125,7 @@ function getImageEditSizeForSelection(width, height, model) {
 }
 
 function supportsFlexibleImageSize(model) {
-  return isGptImage2OrNewerModel(model) || isComfyModel(model);
+  return isGptImage2OrNewerModel(model);
 }
 
 function nearestStandardImageSize(width, height) {
@@ -9829,7 +8777,6 @@ function setBusy(busy) {
   $("clearResultsBtn").disabled = busy;
   $("saveSettingsBtn").disabled = busy;
   $("testConnectionBtn").disabled = busy;
-  $("testKoukoutuBtn").disabled = busy;
   $("generateBtnLabel").textContent = busy ? "生成中..." : "生成";
 }
 
@@ -11056,10 +10003,6 @@ function normalizeBaseUrl(value) {
   return url.replace(/\/+$/, "");
 }
 
-function normalizeComfyUrl(value) {
-  return String(value || "").trim().replace(/\/+$/, "") || DEFAULT_COMFY_URL;
-}
-
 function normalizePath(value) {
   const path = String(value || "");
   return path.startsWith("/") ? path : `/${path}`;
@@ -11084,38 +10027,6 @@ function sanitizeDebugEndpointUrl(value) {
       .replace(/^(https?:\/\/)[^/@\s]+@/i, "$1")
       .split(/[?#]/)[0];
   }
-}
-
-function buildComfyUrl(baseUrl, path) {
-  return `${normalizeComfyUrl(baseUrl)}${normalizePath(path)}`;
-}
-
-function isComfyModel(model) {
-  return /^comfy:/i.test(String(model || ""));
-}
-
-function getComfyPresetLabel(model) {
-  const value = String(model || "").toLowerCase();
-  const preset = COMFY_WORKFLOWS[value];
-  if (preset) return preset.label;
-  if (value === "comfy:transparent-effect") return "ComfyUI Transparent Effect";
-  return "ComfyUI";
-}
-
-function getComfyWorkflowPreset(model) {
-  return COMFY_WORKFLOWS[String(model || "").toLowerCase()] || null;
-}
-
-function createRandomSeed() {
-  return Math.floor(Math.random() * 2147483647);
-}
-
-function createComfyClientId() {
-  return `photoshop-plugin-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function readJsonLocal(key, fallback) {
