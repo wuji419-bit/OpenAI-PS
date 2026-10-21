@@ -1,5 +1,6 @@
 const photoshop = require("photoshop");
-const gateway = require("./gateway.js");
+// UXP loads this script from index.html; CommonJS paths start at the plugin root.
+const gateway = require("./src/gateway.js");
 const { entrypoints, storage } = require("uxp");
 
 const app = photoshop.app;
@@ -9,7 +10,7 @@ const imaging = photoshop.imaging;
 const constants = photoshop.constants || {};
 const fs = storage.localFileSystem;
 const PLUGIN_ID = "com.local.openai.photoshop.generator";
-const PLUGIN_VERSION = "0.1.314";
+const PLUGIN_VERSION = "0.1.315";
 
 entrypoints.setup({
   panels: {
@@ -1263,7 +1264,7 @@ async function runOfflineSixModeDiagnostics() {
             await importSelected();
           }
           const status = $("statusBar").textContent || "";
-          if (/^失败|请先/.test(status)) {
+          if (/失败|^请先/.test(status)) {
             failures.push(`${mode}: ${status}`);
             console.warn(`[OpenAI Photoshop Generator] offline diagnostics failed status: ${mode}; status=${status}`);
           } else {
@@ -1571,30 +1572,32 @@ async function withOfflineDiagnosticStubs(callback) {
 async function verifySelectionCompositeAlpha(item, rect) {
   const expected = await decodePngRgbaBase64(await normalizeImageItemToPngBase64(item));
   if (expected.width !== rect.width || expected.height !== rect.height) return false;
-  const sample = await imaging.getPixels({
-    documentID: app.activeDocument.id, sourceBounds: {
-      left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
-    }, componentSize: 8, colorSpace: "RGB", applyAlpha: false,
-  });
-  const imageData = sample?.imageData;
-  try {
-    const pixels = imageData ? await imageData.getData({ chunky: true }) : null;
-    const source = sample?.sourceBounds || { left: rect.left, top: rect.top };
-    const components = imageData?.components || 0;
-    const hasAlpha = components === 2 || components === 4;
-    for (let y = 0; y < expected.height; y += 1) {
-      for (let x = 0; x < expected.width; x += 1) {
-        const sx = rect.left + x - source.left;
-        const sy = rect.top + y - source.top;
-        const inSample = pixels && sx >= 0 && sy >= 0 && sx < imageData.width && sy < imageData.height;
-        const actual = !inSample ? 0 : hasAlpha ? pixels[(sy * imageData.width + sx) * components + components - 1] : 255;
-        if (Math.abs(actual - expected.rgba[(y * expected.width + x) * 4 + 3]) > 1) return false;
+  return core.executeAsModal(async () => {
+    const sample = await imaging.getPixels({
+      documentID: app.activeDocument.id, sourceBounds: {
+        left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
+      }, componentSize: 8, colorSpace: "RGB", applyAlpha: false,
+    });
+    const imageData = sample?.imageData;
+    try {
+      const pixels = imageData ? await imageData.getData({ chunky: true }) : null;
+      const source = sample?.sourceBounds || { left: rect.left, top: rect.top };
+      const components = imageData?.components || 0;
+      const hasAlpha = components === 2 || components === 4;
+      for (let y = 0; y < expected.height; y += 1) {
+        for (let x = 0; x < expected.width; x += 1) {
+          const sx = rect.left + x - source.left;
+          const sy = rect.top + y - source.top;
+          const inSample = pixels && sx >= 0 && sy >= 0 && sx < imageData.width && sy < imageData.height;
+          const actual = !inSample ? 0 : hasAlpha ? pixels[(sy * imageData.width + sx) * components + components - 1] : 255;
+          if (Math.abs(actual - expected.rgba[(y * expected.width + x) * 4 + 3]) > 1) return false;
+        }
       }
+      return true;
+    } finally {
+      imageData?.dispose();
     }
-    return true;
-  } finally {
-    imageData?.dispose();
-  }
+  }, { commandName: "Verify OpenAI selection composite Alpha" });
 }
 
 async function createOfflineDiagnosticDocument() {

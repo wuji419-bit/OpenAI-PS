@@ -1,6 +1,6 @@
 # OpenAI Photoshop Generator
 
-当前版本：**v0.1.314**
+当前版本：**v0.1.315**
 
 这是一个从零写的轻量版 Photoshop UXP 插件，目标是在 Photoshop 里直接完成 OpenAI 图像生成、局部重绘、扩图和拆图。
 
@@ -170,7 +170,7 @@ node scripts/restart-photoshop-and-smoke.js --confirm-saved
 - `npm run test:alpha` 输出 `NATIVE_TRANSPARENCY_OK`；`npm run smoke` 同时运行原有 smoke 和原生透明回归，不调用收费接口。
 - `audit-plugin-state.js --strict-runtime` 只有真实 Photoshop 会话加载对应版本才可通过；Photoshop 未运行时，普通审计最多报告 `ready_on_disk`，不能当成实际宿主验证。
 
-## 内部网关、任务保护与结果恢复（v0.1.314）
+## 内部网关、任务保护与结果恢复（v0.1.315）
 
 在服务设置填写网关 Base URL 和 API Key，显式选择 Images API（默认）或 Responses。Images 使用可配置的生图/编辑路径；Responses 使用可配置的 Responses Path 和控制模型。Model ID 是图片模型，允许网关自定义别名；快速/深度按钮的映射也可单独配置。旧版没有协议字段的配置升级后默认 Images，请按网关实际能力选择。不会根据端口、404 或模型错误自动换协议或控制模型；测试连接仅验证 `/models` 的可达性和鉴权。
 

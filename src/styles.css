@@ -2418,6 +2418,8 @@ button:disabled {
 
 .settings-header {
   display: flex !important;
+  position: relative;
+  z-index: 50;
   align-items: center !important;
   gap: 10px !important;
   min-height: 48px !important;
@@ -2427,10 +2429,10 @@ button:disabled {
 
 .settings-header .back-button {
   display: inline-flex !important;
-  flex: 0 0 34px !important;
-  width: 34px !important;
+  flex: 0 0 54px !important;
+  width: 54px !important;
   height: 34px !important;
-  min-width: 34px !important;
+  min-width: 54px !important;
   visibility: visible !important;
   opacity: 1 !important;
 }
@@ -2444,7 +2446,7 @@ button:disabled {
 
 .settings-scroll {
   display: block !important;
-  padding: 14px 16px 170px !important;
+  padding: 14px 16px 24px !important;
   overflow-y: auto !important;
 }
 
@@ -2535,6 +2537,8 @@ button:disabled {
 
 .settings-footer {
   display: block !important;
+  position: relative;
+  z-index: 50;
 }
 
 .settings-actions {

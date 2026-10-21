@@ -1,6 +1,6 @@
 {
   "name": "openai-photoshop-generator",
-  "version": "0.1.314",
+  "version": "0.1.315",
   "private": true,
   "description": "OpenAI Photoshop Generator UXP plugin packaging helpers.",
   "scripts": {

@@ -320,7 +320,7 @@ function connectCdp(cdpUrl) {
         expression: 'typeof document !== "undefined" && !!document.querySelector("#versionText")',
         contextId: candidateContextId,
         returnByValue: true,
-        awaitPromise: true,
+        awaitPromise: false,
       });
       if (getEvaluateValue(result) === true) {
         contextId = candidateContextId;
@@ -335,7 +335,7 @@ function connectCdp(cdpUrl) {
       expression,
       contextId,
       returnByValue: true,
-      awaitPromise: true,
+      awaitPromise: false,
     });
     if (result?.exceptionDetails) {
       const exception = result.exceptionDetails.exception;
@@ -533,6 +533,7 @@ function osHomedir() {
 async function main() {
   const version = readPluginVersion();
   const debug = await loadAndDebugPlugin(version);
+  console.log(`PHOTOSHOP_SMOKE_SESSION version=${version} session=${debug.pluginSessionId}`);
   const cdp = connectCdp(debug.cdpUrl);
   try {
     await cdp.enableRuntime();

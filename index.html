@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenAI 图片</title>
-    <link rel="stylesheet" href="./src/styles.css?v=0.1.314" />
-    <script src="./src/app.js?v=0.1.314" defer></script>
+    <link rel="stylesheet" href="./src/styles.css?v=0.1.315" />
+    <script src="./src/app.js?v=0.1.315" defer></script>
   </head>
   <body>
     <main class="app-shell">
@@ -15,7 +15,7 @@
             <div class="title-inline">
               <span id="connectionBadge" class="connection-dot" aria-hidden="true" title="未配置 API Key"></span>
               <h1>OpenAI 图片</h1>
-              <span id="versionText" class="version-inline">v0.1.314</span>
+              <span id="versionText" class="version-inline">v0.1.315</span>
             </div>
             <button id="settingsToggleBtn" class="icon-button settings-entry-button" type="button" title="打开 API 设置" aria-label="打开 API 设置">
               设置
@@ -223,8 +223,8 @@
 
       <section id="settingsView" class="settings-view hidden">
         <header class="settings-header">
-          <button id="settingsBackBtn" class="icon-button back-button" type="button" title="返回" aria-label="返回"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5 9 12l5.5 5.5" /></svg></button>
-          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.314</span></div>
+          <button id="settingsBackBtn" class="icon-button back-button" type="button" title="返回" aria-label="返回">返回</button>
+          <div class="settings-title"><h2>服务设置</h2><span class="version-inline">v0.1.315</span></div>
         </header>
         <div class="settings-scroll">
           <section class="settings-group">
@@ -254,11 +254,11 @@
             <label class="form-field"><span class="field-label">Responses 控制模型</span><input id="responsesModelInput" type="text" value="gpt-5.5" /></label>
             <p class="settings-help">Responses 协议使用控制模型调用图片工具；Model ID 始终作为图片模型原样发送。</p>
           </section>
-        </div>
         <footer class="settings-footer">
           <div class="settings-status-row"><span id="settingsStatusDot" class="status-dot" aria-hidden="true"></span><span id="settingsStatusBar" class="status-text">就绪</span></div>
           <div class="settings-actions"><button id="testConnectionBtn" class="secondary-button" type="button">测试连接</button><button id="saveSettingsBtn" class="primary-button" type="button">保存配置</button></div>
         </footer>
+        </div>
       </section>
     </main>
   </body>

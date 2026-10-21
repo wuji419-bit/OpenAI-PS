@@ -443,7 +443,8 @@ function createContext() {
           storage: { localFileSystem, formats: { binary: "binary" } },
         };
       }
-      if (name.startsWith("./")) return require(path.join(root, "src", name));
+      // Match scripts loaded by index.html in the real UXP host.
+      if (name.startsWith("./")) return require(path.join(root, name));
       return require(name);
     },
     document: {

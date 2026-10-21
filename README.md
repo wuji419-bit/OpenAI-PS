@@ -1,6 +1,6 @@
 # OpenAI Photoshop Generator
 
-Current version: **v0.1.314**
+Current version: **v0.1.315**
 
 ![OpenAI Photoshop Generator running inside Adobe Photoshop](stitch-reference/photoshop-panel-v0163.png)
 
@@ -127,7 +127,7 @@ Do not commit API keys, private PSD files, generated client assets, or local plu
 
 MIT License. See [`LICENSE`](LICENSE).
 
-## Gateway and task recovery (v0.1.314)
+## Gateway and task recovery (v0.1.315)
 
 Select Images API (default) or Responses explicitly in service settings. Configure the gateway base URL, paths, image model ID, Responses controller and fast/deep button aliases. Model IDs and ports are preserved; errors never silently change the selected protocol or controller. Existing settings without a protocol field migrate to Images. A `/models` probe does not prove image-generation capability.
 

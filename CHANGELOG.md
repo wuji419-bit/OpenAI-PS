@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.315] - 2026-10-21
+
+### Fixed
+
+- Real Photoshop testing exposed a UXP module-resolution failure: HTML-loaded scripts resolve CommonJS paths from the plugin root. Load the gateway module from `./src/gateway.js` and make the offline host use the same root, so it catches missing modules.
+- Run the real-host composite Alpha verifier inside Photoshop's modal scope. Treat an automatic-placement failure as a failed diagnostic, and avoid awaiting synchronous CDP evaluations that the host can report as collected promises.
+- Put connection/save actions after the fields in the settings scroll area, avoiding native input controls overlapping a fixed footer. A visible text Back button and working connection button were verified by screen clicks in Photoshop.
+
 ## [0.1.314] - 2026-10-21
 
 ### Added

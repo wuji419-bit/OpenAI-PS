@@ -238,8 +238,13 @@ async function main() {
     const {api}=boot();host(api);
     const pixels=new Uint8Array(48);pixels.set([255,0,0,128],(1*4+1)*4);
     const item=patch(api,pixels);let disposed=false;
-    api.imaging.getPixels=async()=>({sourceBounds:{left:3,top:2},imageData:{width:1,height:1,components:4,
-      getData:async()=>new Uint8Array([255,0,0,128]),dispose(){disposed=true;}}});
+    let inModal=false;
+    api.core.executeAsModal=async fn=>{inModal=true;try{return await fn();}finally{inModal=false;}};
+    api.imaging.getPixels=async()=>{
+      assert(inModal,'Photoshop composite sampling requires a modal scope');
+      return {sourceBounds:{left:3,top:2},imageData:{width:1,height:1,components:4,
+        getData:async()=>new Uint8Array([255,0,0,128]),dispose(){disposed=true;}}};
+    };
     assert.equal(await api.verifySelectionCompositeAlpha(item,rect),true);assert.equal(disposed,true);
     api.imaging.getPixels=async()=>({sourceBounds:{left:2,top:1},imageData:{width:4,height:3,components:3,
       getData:async()=>new Uint8Array(36).fill(255),dispose(){}}});
