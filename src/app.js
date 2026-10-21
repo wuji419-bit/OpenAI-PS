@@ -1,4 +1,5 @@
 const photoshop = require("photoshop");
+const gateway = require("./gateway.js");
 const { entrypoints, storage } = require("uxp");
 
 const app = photoshop.app;
@@ -8,7 +9,7 @@ const imaging = photoshop.imaging;
 const constants = photoshop.constants || {};
 const fs = storage.localFileSystem;
 const PLUGIN_ID = "com.local.openai.photoshop.generator";
-const PLUGIN_VERSION = "0.1.313";
+const PLUGIN_VERSION = "0.1.314";
 
 entrypoints.setup({
   panels: {
@@ -29,7 +30,7 @@ const PROMPT_DRAFT_KEY = "openaiPhotoshop.promptDrafts.v1";
 const DEFAULT_BASE_URL = "http://127.0.0.1:49456/v1";
 const DEFAULT_CUTOUT_ANALYSIS_MODEL = "gpt-5.5";
 const DEFAULT_SEMANTIC_EDIT_MODEL = "gpt-5.5";
-const RESPONSES_MAIN_MODEL_FALLBACKS = ["gpt-5.5", "gpt-5", "gpt-6-astra", "gpt-4.1", "gpt-4o"];
+const TASK_SESSION_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const OPENAI_INPAINT_FULL_CANVAS_MAX_PIXELS = 3840 * 2160;
 const PROTECTED_REPAINT_MIN_SOURCE_NON_WHITE_RATIO = 0.03;
 const PROTECTED_REPAINT_MIN_RESULT_NON_WHITE_RATIO = 0.002;
@@ -108,12 +109,11 @@ const state = {
   activeRequestController: null,
   activeXhrs: new Set(),
   cancelRequested: false,
+  activeTask: null,
+  taskSequence: 0,
   promptDrafts: {},
   promptDraftSaveSuspended: false,
   promptDraftAutosaveTimer: null,
-  unsupportedGenerationEndpoints: new Set(),
-  unsupportedEditEndpoints: new Set(),
-  unsupportedResponsesEditEndpoints: new Set(),
 };
 
 const CRC32_TABLE = createCrc32Table();
@@ -245,7 +245,8 @@ function syncModelTierButtons(model) {
   const buttons = segment.querySelectorAll ? segment.querySelectorAll("button") : [];
   if (buttons && buttons.forEach) {
     buttons.forEach((btn) => {
-      const tier = String(btn?.dataset?.tier || "").toLowerCase();
+      const configured = btn?.dataset?.tier === "gpt-image-2.5-sunburst" ? $("deepModelInput").value : $("fastModelInput").value;
+      const tier = String(configured || btn?.dataset?.tier || "").toLowerCase();
       if (tier && (tier === cleanModel || cleanModel.startsWith(tier))) {
         btn?.classList?.add("is-active");
       } else {
@@ -308,6 +309,7 @@ function bindEvents() {
     }, 700);
   }
   $("importSelectedBtn").addEventListener("click", importSelected);
+  $("bindResultDocumentBtn").addEventListener("click", bindSelectedResultToDocument);
   $("clearResultsBtn").addEventListener("click", () => {
     state.results = [];
     state.selectedId = null;
@@ -325,12 +327,13 @@ function bindEvents() {
   $("modelTierSegment")?.addEventListener("click", (event) => {
     const button = event.target?.closest?.("button[data-tier]");
     if (!button) return;
-    const tier = button.dataset.tier;
+    const config = gateway.configuration(getSettings());
+    const tier = button.dataset.tier === "gpt-image-2.5-sunburst" ? config.deepModel : config.fastModel;
     if (!tier) return;
     $("modelInput").value = tier;
     syncModelTierButtons(tier);
     saveSettings();
-    setStatus(`已切换模型：${tier === "gpt-image-2.5-flare" ? "快速 (Flare)" : "深度 (Sunburst)"}`);
+    setStatus(`已切换模型：${button.dataset.tier === "gpt-image-2.5-sunburst" ? "深度" : "快速"}（${tier}）`);
   });
   $("modelInput")?.addEventListener("input", () => {
     syncModelTierButtons($("modelInput").value);
@@ -363,6 +366,11 @@ function loadSettings() {
     model: "gpt-image-2.5-flare",
     generationPath: "/images/generations",
     editPath: "/images/edits",
+    apiProtocol: "images",
+    responsesPath: "/responses",
+    responsesModel: DEFAULT_SEMANTIC_EDIT_MODEL,
+    fastModel: "gpt-image-2.5-flare",
+    deepModel: "gpt-image-2.5-sunburst",
     size: "auto",
     quality: "auto",
     background: "auto",
@@ -379,6 +387,11 @@ function loadSettings() {
   $("modelInput").value = settings.model;
   $("generationPathInput").value = settings.generationPath;
   $("editPathInput").value = settings.editPath;
+  $("apiProtocolInput").value = settings.apiProtocol;
+  $("responsesPathInput").value = settings.responsesPath;
+  $("responsesModelInput").value = settings.responsesModel;
+  $("fastModelInput").value = settings.fastModel;
+  $("deepModelInput").value = settings.deepModel;
   $("sizeInput").value = settings.size;
   $("qualityInput").value = normalizeResponsesImageQuality(settings.quality);
   $("countInput").value = clampInteger(settings.count, 1, MAX_BATCH_COUNT, 1);
@@ -420,17 +433,13 @@ function applyAuthJson() {
     return;
   }
 
-  $("baseUrlInput").value = "https://api.openai.com/v1";
+  // Importing a key must preserve the configured gateway and protocol.
   $("apiKeyInput").value = apiKey;
   $("quickApiKeyInput").value = apiKey;
-  $("modelInput").value = "gpt-image-2.5-flare";
-  syncModelTierButtons("gpt-image-2.5-flare");
-  $("generationPathInput").value = "/images/generations";
-  $("editPathInput").value = "/images/edits";
   $("authJsonInput").value = "";
   saveSettings();
   updateKeyBadge();
-  setStatus("已切换为官方 OpenAI API 直连");
+  setStatus("已导入 API Key，保留当前网关配置");
 }
 
 function extractOpenAIApiKey(raw) {
@@ -483,6 +492,11 @@ function getSettings() {
     model: $("modelInput").value.trim() || "gpt-image-2.5-flare",
     generationPath: normalizePath($("generationPathInput").value.trim() || "/images/generations"),
     editPath: normalizePath($("editPathInput").value.trim() || "/images/edits"),
+    apiProtocol: $("apiProtocolInput").value || "images",
+    responsesPath: normalizePath($("responsesPathInput").value.trim() || "/responses"),
+    responsesModel: $("responsesModelInput").value.trim() || DEFAULT_SEMANTIC_EDIT_MODEL,
+    fastModel: $("fastModelInput").value.trim() || "gpt-image-2.5-flare",
+    deepModel: $("deepModelInput").value.trim() || "gpt-image-2.5-sunburst",
     size: $("sizeInput").value,
     quality: normalizeResponsesImageQuality($("qualityInput").value),
     background: $("transparentBgInput")?.checked ? "transparent" : "auto",
@@ -855,9 +869,7 @@ async function testConnection() {
     }, "测试连接");
 
     if (response.ok) {
-      setStatus(shouldUseSidecarImageEndpointsFirst(settings, true)
-        ? "连接正常；选区重绘将用 /responses 普通上传截图，其他兼容编辑保留 /images/edits"
-        : "连接正常；选区重绘需要 /responses 图像工具，/images/edits 只用于兼容编辑/扩图");
+      setStatus(`服务和鉴权可达；已选择 ${gateway.configuration(settings).protocol === "images" ? "Images API" : "Responses"}，图片能力需以实际请求为准`);
     } else if (response.status === 401 || response.status === 403) {
       setStatus("服务可达，但 API Key 无效");
     } else if (response.status === 404) {
@@ -881,376 +893,264 @@ function resolveSplitImageModel(model) {
   return "gpt-image-2.5-sunburst";
 }
 
+function captureResultSourceContext() {
+  const doc = app.activeDocument;
+  return doc ? Object.freeze({
+    sessionId: TASK_SESSION_ID, documentId: getDocumentId(doc), name: doc.name || "",
+    width: Math.round(toNumber(doc.width)), height: Math.round(toNumber(doc.height)),
+  }) : null;
+}
+
+function assertResultDocument(item) {
+  const source = item?.sourceContext;
+  if (!source) return; // Old history retains its original manual-import behavior.
+  if (source.sessionId !== TASK_SESSION_ID) {
+    throw new Error("历史结果来自先前会话，请先点击“绑定当前文档”确认目标");
+  }
+  const doc = app.activeDocument;
+  if (!doc || getDocumentId(doc) !== source.documentId) {
+    throw new Error("结果属于其他文档，请返回原文档或点击“绑定当前文档”");
+  }
+  const width = Math.round(toNumber(doc.width)), height = Math.round(toNumber(doc.height));
+  const expanded = item.mode === "outpaint" && item.placementRect;
+  if ((width !== source.width || height !== source.height) &&
+      !(expanded && width === expanded.width && height === expanded.height)) {
+    throw new Error("目标画布尺寸已改变，已停止使用过期的回填坐标");
+  }
+}
+
+function assertGenerationTask(task, checkDocument = true) {
+  if (state.activeTask !== task) throw makeCancelError();
+  throwIfCancelled();
+  if (!checkDocument) return;
+  const current = app.activeDocument || null;
+  if (current !== task.sourceDocument &&
+      (!current || !task.sourceDocument || getDocumentId(current) == null ||
+       getDocumentId(current) !== getDocumentId(task.sourceDocument))) {
+    throw new Error("生成期间目标文档已切换，结果会保留供手动导入");
+  }
+  if (task.snapshot.sourceContext) assertResultDocument({ sourceContext: task.snapshot.sourceContext });
+}
+
+async function bindSelectedResultToDocument() {
+  if (state.busy) return;
+  const item = getSelectedResult();
+  if (!item || !app.activeDocument) { setStatus("请先选择结果并打开目标文档"); return; }
+  const source = captureResultSourceContext();
+  const original = item.sourceContext;
+  const expanded = item.mode === "outpaint" && item.placementRect;
+  if (isCapturedRegionResult(item) && original &&
+      (source.width !== original.width || source.height !== original.height) &&
+      !(expanded && source.width === expanded.width && source.height === expanded.height)) {
+    setStatus("目标画布尺寸与原文档不一致，不能重新绑定原坐标结果"); return;
+  }
+  setBusy(true);
+  try {
+    item.sourceContext = source;
+    await saveHistoryItem(item, { strict: true });
+    setStatus("已将所选结果绑定当前文档，可直接导入，无需重新生成");
+  } catch (error) {
+    item.sourceContext = original;
+    setStatus(`绑定失败：${error.message || error}`);
+  } finally { setBusy(false); }
+}
+
+function stampGenerationResult(item, task, metadata, index) {
+  const { settings, mode, prompt, sourceContext } = task.snapshot;
+  return {
+    placementMode: null, targetRect: null, placementRect: null,
+    ...metadata, ...item,
+    id: `${task.id}-${index}`, taskId: task.id, sourceContext,
+    prompt, mode, model: settings.model, quality: settings.quality,
+    size: metadata.size || settings.size, format: item.format || settings.format,
+    cropRect: mode === "split" || metadata.placementMode === "direct-selection-patch"
+      ? null : (item.cropRect || metadata.targetRect || null),
+    createdAt: new Date().toISOString(),
+  };
+}
+
 async function runGeneration() {
   if (state.busy) return;
-
-  const settings = getSettings();
+  const settings = Object.freeze({ ...getSettings() });
+  const mode = state.mode;
   $("baseUrlInput").value = settings.baseUrl;
-  if (!settings.apiKey) {
-    setStatus("请先填写 OpenAI API Key");
-    return;
-  }
-
+  if (!settings.apiKey) { setStatus("请先填写 API Key"); return; }
   const rawPrompt = $("promptInput").value.trim();
-  if (!rawPrompt && state.mode !== "split") {
-    setStatus("请先输入提示词");
-    return;
-  }
-
+  if (!rawPrompt && mode !== "split") { setStatus("请先输入提示词"); return; }
+  gateway.configuration(settings); // Validate the explicit protocol before submitting.
   savePromptDraftForMode();
-  const negativePrompt = isNegativePromptEnabledForMode(state.mode) ? $("negativePromptInput").value.trim() : "";
-  const prompt = buildPrompt(rawPrompt || "auto", negativePrompt);
   saveSettings();
-  const runController = createAbortController();
-  state.activeRequestController = runController;
+  const negative = isNegativePromptEnabledForMode(mode) ? $("negativePromptInput").value.trim() : "";
+  const prompt = buildPrompt(rawPrompt || "auto", negative);
+  const task = {
+    id: `${Date.now()}-${++state.taskSequence}`,
+    controller: createAbortController(), sourceDocument: app.activeDocument || null,
+    snapshot: Object.freeze({ settings, mode, prompt, sourceContext: captureResultSourceContext(),
+      manualReference: state.manualReferenceImage ? Object.freeze({ ...state.manualReferenceImage }) : null,
+      fitSelection: $("fitSelectionInput").checked, padding: Object.freeze({ ...getPadding() }) }),
+  };
+  state.activeTask = task;
+  state.activeRequestController = task.controller;
   state.cancelRequested = false;
   state.results = [];
   state.selectedId = null;
   state.outputView = "results";
-  renderResults();
   setBusy(true);
   setProgress(8, true);
-
+  renderResults();
+  const stamped = [];
+  let receivedCount = 0;
   try {
-    throwIfCancelled();
-    setStatus("正在准备请求...");
-    let items = [];
-    let outputSize = settings.size;
-    let targetRect = null;
-    let placementRect = null;
-    let placementWarning = "";
-    let inpaintSourceContext = null;
-
-    if (state.mode === "generate") {
-      setProgress(20, true);
-      items = await requestGenerations(settings, prompt);
-    } else if (state.mode === "reference") {
-      setProgress(18, true);
-      const selection = await getSelectionInfo();
-      if (state.manualReferenceImage?.b64) {
-        setStatus(`正在使用手动参考图：${state.manualReferenceImage.name || "reference"}`);
-        const reference = await createManualReferenceInputs(settings);
-        outputSize = reference.displaySize;
-        setProgress(40, true);
-        items = await requestEdits(
-          settings,
-          buildImageEditPrompt(prompt, "reference"),
-          reference.image,
-          null,
-          {
-            size: reference.apiSize,
-            manualReferenceEdit: true,
-            referenceSize: reference.displaySize,
-          }
-        );
-        items = (items || []).map((item) => ({
-          ...item,
-          placementMode: null,
-          targetRect: null,
-          placementRect: null,
-        }));
-      } else if (isSelectionValid(selection)) {
-        setStatus("正在导出选区上下文作为无 Mask 参考图...");
-        const reference = await createReferenceRegionInputs(selection, getDocumentSize(), settings.model);
-        outputSize = reference.displaySize;
-        targetRect = reference.targetRect;
-        placementRect = reference.placementRect;
-        setProgress(40, true);
-        items = await requestEdits(
-          settings,
-          buildImageEditPrompt(prompt, "referenceNoMask"),
-          reference.image,
-          null,
-          { size: reference.apiSize, screenshotReferenceEdit: true, referenceSize: reference.displaySize }
-        );
-        items = await normalizeReferenceRegionResultItems(items, reference);
-        items = (items || []).map((item) => ({
-          ...item,
-          placementMode: "full-region-patch",
-          targetRect: reference.targetRect,
-          placementRect: reference.placementRect,
-        }));
+    let selection = null;
+    if (mode === "generate" || mode === "reference" || mode === "inpaint") {
+      selection = await getSelectionInfo();
+      if (selection) selection = Object.freeze({ ...selection });
+    }
+    assertGenerationTask(task);
+    const once = { ...settings, count: 1 };
+    let requestOne, prepare = null, metadata = {};
+    const docSize = task.snapshot.sourceContext;
+    if (mode === "generate") {
+      requestOne = () => requestGenerations(once, prompt);
+      if (task.snapshot.fitSelection && isSelectionValid(selection)) {
+        metadata = { targetRect: selection, placementRect: selection };
+      }
+    } else if (mode === "reference") {
+      if (task.snapshot.manualReference?.b64) {
+        const reference = await createManualReferenceInputs(settings, task.snapshot.manualReference);
+        metadata.size = reference.displaySize;
+        requestOne = () => requestEdits(once, buildImageEditPrompt(prompt, "reference"), reference.image, null,
+          { size: reference.apiSize, manualReferenceEdit: true, referenceSize: reference.displaySize });
       } else {
-        const docSize = getDocumentSize();
-        const fullRect = getFullDocumentRect(docSize);
-        setStatus("正在导出整张画布作为无 Mask 普通参考图...");
-        const image = await exportActiveDocumentAsBase64();
-        await saveDebugBase64Image("openai-last-reference-full.png", image);
-        outputSize = `${fullRect.width}x${fullRect.height}`;
-        targetRect = fullRect;
-        placementRect = fullRect;
-        setProgress(36, true);
-        items = await requestEdits(settings, buildImageEditPrompt(prompt, "reference"), image, null, {
-          size: settings.size,
-          screenshotReferenceEdit: true,
-          referenceSize: `${fullRect.width}x${fullRect.height}`,
-        });
-        items = await normalizeReferenceRegionResultItems(items, { placementRect: fullRect });
-        items = (items || []).map((item) => ({
-          ...item,
-          placementMode: "full-region-patch",
-          targetRect: fullRect,
-          placementRect: fullRect,
-        }));
+        const reference = isSelectionValid(selection)
+          ? await createReferenceRegionInputs(selection, docSize, settings.model)
+          : { image: await exportActiveDocumentAsBase64(), apiSize: settings.size,
+              placementRect: getFullDocumentRect(docSize), targetRect: getFullDocumentRect(docSize) };
+        metadata = { size: reference.displaySize || `${docSize.width}x${docSize.height}`,
+          placementMode: "full-region-patch", targetRect: reference.targetRect, placementRect: reference.placementRect };
+        requestOne = () => requestEdits(once, buildImageEditPrompt(prompt, "referenceNoMask"), reference.image, null,
+          { size: reference.apiSize, screenshotReferenceEdit: true, referenceSize: metadata.size });
+        prepare = items => normalizeReferenceRegionResultItems(items, reference);
       }
-    } else if (state.mode === "inpaint") {
-      setProgress(15, true);
-      const selection = await getSelectionInfo();
-      if (!isSelectionValid(selection)) {
-        throw new Error("请先用选区工具选中要重绘的区域");
-      }
-      const docSize = getDocumentSize();
-      inpaintSourceContext = { documentId: getDocumentId(app.activeDocument), ...docSize };
-      setProgress(34, true);
-      setStatus("正在读取当前 Photoshop 选区...");
-      const inpaintSettings = getInpaintSettings(settings);
-      const editSelection = selection;
-      setProgress(40, true);
+    } else if (mode === "inpaint") {
+      if (!isSelectionValid(selection)) throw new Error("请先用选区工具选中要重绘的区域");
       setStatus("正在把选区导出为截图参考图...");
-      const inpaint = await createInpaintScreenshotInputs(editSelection, docSize, settings.model);
-      outputSize = inpaint.displaySize;
-      targetRect = inpaint.targetRect;
-      placementRect = inpaint.placementRect;
-      setProgress(58, true);
-      const referenceSizeHint = inpaint.referenceScale > 1
-        ? `，上传参考图 ${inpaint.referenceCanvasSize}，回贴仍为原选区`
-        : "";
-      setStatus(`正在按截图参考重绘：原选区 ${inpaint.displaySize}${referenceSizeHint}`);
-      items = await requestEdits(inpaintSettings, prompt, inpaint.image, null, {
-        size: inpaint.apiSize,
-        screenshotReferenceEdit: true,
-        referenceCrop: inpaint.referenceCrop,
-        referenceSize: inpaint.displaySize,
-        referenceCanvasSize: inpaint.referenceCanvasSize,
+      const inpaint = await createInpaintScreenshotInputs(selection, docSize, settings.model);
+      metadata = { size: inpaint.displaySize, placementMode: "direct-selection-patch",
+        targetRect: inpaint.targetRect, placementRect: inpaint.placementRect, skipPreviewCrop: true };
+      requestOne = () => requestEdits(getInpaintSettings(once), prompt, inpaint.image, null, {
+        size: inpaint.apiSize, screenshotReferenceEdit: true, referenceCrop: inpaint.referenceCrop,
+        referenceSize: inpaint.displaySize, referenceCanvasSize: inpaint.referenceCanvasSize,
         referenceCropBox: formatScreenshotReferenceCropBox(inpaint.referenceCrop),
       });
-      items = await cropScreenshotReferenceEditItems(items, inpaint.referenceCrop, {
-        requireProtectedContent: isPreservationConstraintText(prompt),
-      });
-      setProgress(84, true);
-      setStatus("模型已返回，正在准备截图结果图层...");
-      items = (items || []).map((item) => ({
-        ...item,
-        importB64: item.importB64 || item.b64,
-        placementMode: "direct-selection-patch",
-        targetRect: inpaint.targetRect,
-        placementRect: inpaint.placementRect,
-        cropRect: null,
-        skipPreviewCrop: true,
-      }));
-    } else if (state.mode === "outpaint") {
-      setProgress(18, true);
+      prepare = async items => (await cropScreenshotReferenceEditItems(items, inpaint.referenceCrop,
+        { requireProtectedContent: isPreservationConstraintText(prompt) })).map(item => ({
+          ...item, importB64: item.importB64 || item.b64, ...metadata, cropRect: null,
+        }));
+    } else if (mode === "outpaint") {
       const image = await exportActiveDocumentAsBase64();
-      const docSize = getDocumentSize();
-      setProgress(36, true);
-      const outpaint = await createOutpaintInputs(image, docSize, getPadding());
-      outputSize = outpaint.displaySize;
-      targetRect = outpaint.targetRect;
-      placementRect = outpaint.placementRect;
-      setProgress(58, true);
-      items = await requestEdits(settings, buildImageEditPrompt(prompt, "outpaint"), outpaint.image, outpaint.mask);
-      items = await normalizeOutpaintResultItems(items, outpaint);
-      items = items.map((item) => ({
-        ...item,
-        outpaintPadding: outpaint.padding,
-        outpaintBaseSize: outpaint.baseSize,
-        targetRect: outpaint.targetRect,
-        placementRect: outpaint.placementRect,
-      }));
-    } else if (state.mode === "split") {
-      setProgress(18, true);
-      const docSize = getDocumentSize();
-      const fullRect = { left: 0, top: 0, right: docSize.width, bottom: docSize.height, width: docSize.width, height: docSize.height };
-      setStatus("正在导出当前画布，准备逐元素透明 PNG 重绘拆图...");
-      const splitInput = await exportActiveDocumentForSplit(docSize);
-      const image = splitInput.image;
-      const splitSettings = {
-        ...settings,
-        model: resolveSplitImageModel(settings.model),
-        count: 1,
-        format: "png",
-        quality: "auto",
-        background: "transparent",
-      };
-      outputSize = `${docSize.width} x ${docSize.height}`;
-      targetRect = fullRect;
-      placementRect = fullRect;
-      setProgress(34, true);
-      const splitTargets = await resolveSemanticSplitTargets(settings, image, splitInput.docSize, rawPrompt);
-      items = (await requestSemanticSplitLayers(splitSettings, image, splitInput.docSize, splitTargets))
-        .map((item) => scaleSemanticSplitItemToDocument(item, splitInput.docSize, fullRect));
+      assertGenerationTask(task);
+      const outpaint = await createOutpaintInputs(image, docSize, task.snapshot.padding);
+      metadata = { size: outpaint.displaySize, outpaintPadding: outpaint.padding, outpaintBaseSize: outpaint.baseSize,
+        targetRect: outpaint.targetRect, placementRect: outpaint.placementRect };
+      requestOne = () => requestEdits(once, buildImageEditPrompt(prompt, "outpaint"), outpaint.image, outpaint.mask);
+      prepare = items => normalizeOutpaintResultItems(items, outpaint);
+    } else if (mode === "split") {
+      const fullRect = getFullDocumentRect(docSize);
+      const input = await exportActiveDocumentForSplit(docSize);
+      assertGenerationTask(task);
+      const targets = await resolveSemanticSplitTargets(settings, input.image, input.docSize, rawPrompt);
+      metadata = { size: `${docSize.width}x${docSize.height}`, targetRect: fullRect, placementRect: fullRect };
+      requestOne = () => requestSemanticSplitLayers({ ...once, model: resolveSplitImageModel(settings.model),
+        format: "png", quality: "auto", background: "transparent" }, input.image, input.docSize, targets);
+      prepare = async items => items.map(item => scaleSemanticSplitItemToDocument(item, input.docSize, fullRect));
     }
-
-    throwIfCancelled();
-    const stamped = (items || []).map((item, index) => ({
-      id: `${Date.now()}-${index}`,
-      b64: item.b64,
-      importB64: item.importB64 || null,
-      url: item.url || null,
-      prompt,
-      mode: state.mode,
-      model: settings.model,
-      size: outputSize,
-      quality: settings.quality,
-      format: item.format || settings.format,
-      placementMode: item.placementMode || null,
-      skipPreviewCrop: Boolean(item.skipPreviewCrop),
-      selectionChannelName: item.selectionChannelName || null,
-      targetRect: item.targetRect || targetRect,
-      placementRect: item.placementRect || placementRect,
-      cropRect: state.mode === "split" ? null : (item.placementMode === "direct-selection-patch" ? null : (item.cropRect || targetRect)),
-      importVisibleRect: item.importVisibleRect || null,
-      outpaintPadding: item.outpaintPadding || null,
-      outpaintBaseSize: item.outpaintBaseSize || null,
-      normalizedPlacementSize: Boolean(item.normalizedPlacementSize),
-      splitIndex: item.splitIndex || null,
-      splitLabel: item.splitLabel || null,
-      splitBounds: item.splitBounds || null,
-      coordinateLocked: Boolean(item.coordinateLocked),
-      whiteMatteMask: Boolean(item.whiteMatteMask),
-      whiteMatteLayer: Boolean(item.whiteMatteLayer),
-      transparentLayer: Boolean(item.transparentLayer),
-      koukoutuMatte: Boolean(item.koukoutuMatte),
-      preclippedImport: Boolean(item.preclippedImport),
-      previewB64: item.previewB64 || null,
-      previewBounds: item.previewBounds || null,
-      createdAt: new Date().toISOString(),
-    }));
-
-    if (!stamped.length) {
-      throw new Error("接口请求成功，但响应里没有可显示的图片数据");
-    }
-
-    state.results = [...stamped, ...state.results];
-    state.selectedId = stamped[0]?.id || state.selectedId;
-    setProgress(86, true);
-    throwIfCancelled();
-    await prepareCroppedPreviews(stamped);
-    setProgress(88, true);
-    throwIfCancelled();
-    renderResults();
-    const historyUpdates = [];
-    for (const item of stamped) {
-      historyUpdates.push(await saveHistoryItem(item));
-    }
-    if (historyUpdates.some(Boolean)) {
-      await prepareCroppedPreviews(stamped);
+    if (!requestOne) throw new Error("不支持的生成模式");
+    const total = mode === "split" ? 1 : settings.count;
+    for (let index = 0; index < total; index += 1) {
+      assertGenerationTask(task);
+      setStatus(`正在生成 ${index + 1}/${total}，已保存 ${stamped.length} 张`);
+      setProgress(40 + Math.round(index / total * 45), true);
+      const batch = await requestOne();
+      if (!batch?.length) throw new Error("接口请求成功，但响应里没有可显示的图片数据");
+      const records = batch.map(item => stampGenerationResult(item, task, metadata, receivedCount++));
+      for (const item of records) {
+        item.pendingProcessing = Boolean(prepare);
+        if (state.activeTask === task) {
+          state.results.push(item);
+          state.selectedId = item.id;
+        }
+        // Preserve accepted outputs even if cancellation arrives just after the
+        // response, processing fails, or a later sibling request fails.
+        await saveHistoryItem(item, { strict: true });
+      }
+      if (state.activeTask !== task) return;
+      renderResults();
+      const prepared = prepare ? await prepare(records) : records;
+      if (prepared.length !== records.length) throw new Error("结果处理数量不一致，原始图片已保留到历史");
+      for (let i = 0; i < records.length; i += 1) {
+        Object.assign(records[i], prepared[i], { pendingProcessing: false });
+        await saveHistoryItem(records[i], { strict: true });
+        stamped.push(records[i]);
+      }
+      assertGenerationTask(task, false);
+      await prepareCroppedPreviews(records);
+      assertGenerationTask(task, false);
       renderResults();
     }
-    throwIfCancelled();
-    if (state.mode === "generate" && stamped.length) {
-      setProgress(92, true);
-      setStatus(`正在把 ${stamped.length} 张生成结果放入当前文档...`);
-      let autoPlacementRect = null;
-      if ($("fitSelectionInput").checked) {
-        try {
-          const liveSelection = await getSelectionInfo();
-          if (isSelectionValid(liveSelection)) {
-            autoPlacementRect = liveSelection;
+    assertGenerationTask(task);
+    setProgress(92, true);
+    let warning = "";
+    try {
+      if (mode === "generate") {
+        for (const item of stamped) {
+          assertGenerationTask(task);
+          await placeResultAsLayer(item, metadata.placementRect || null, "OpenAI Image", null,
+            { fitByImageSize: Boolean(metadata.placementRect), moveToFront: true });
+          // Text-to-image may create its own document when none was open.
+          if (!task.sourceDocument) {
+            task.sourceDocument = app.activeDocument;
+            task.snapshot = Object.freeze({ ...task.snapshot, sourceContext: captureResultSourceContext() });
+            for (const result of stamped) {
+              result.sourceContext = task.snapshot.sourceContext;
+              await saveHistoryItem(result, { strict: true });
+            }
           }
-        } catch (error) {
-          console.warn("[generate] active selection lookup failed; placing at default size", error);
+        }
+      } else if (mode === "inpaint" && stamped[0]) {
+        setStatus("正在把截图重绘结果按原选区位置放回...");
+        const item = stamped[0];
+        await placeResultAsLayer(item, item.placementRect, "OpenAI Inpaint", null,
+          { fitByImageSize: true, pixelExactSelectionPatch: true, moveToFront: true });
+      } else if (mode === "outpaint" && stamped[0]) {
+        const item = stamped[0];
+        await expandCanvasForOutpaint(item.outpaintPadding, item.targetRect, item.outpaintBaseSize, item);
+        await placeResultAsLayer(item, item.placementRect, "OpenAI Outpaint", null, { preserveImageAspect: true });
+      } else if (mode === "split") {
+        for (const item of stamped) {
+          assertGenerationTask(task);
+          await placeResultAsLayer(item, item.placementRect, buildSplitLayerName(item, item.splitIndex), null,
+            { fitByImageSize: true, alignVisibleRect: false });
         }
       }
-      for (let index = 0; index < stamped.length; index += 1) {
-        const item = stamped[index];
-        await placeResultAsLayer(
-          item,
-          autoPlacementRect,
-          stamped.length > 1 ? `OpenAI Image ${index + 1}` : "OpenAI Image",
-          null,
-          {
-            fitByImageSize: Boolean(autoPlacementRect),
-            moveToFront: true,
-          }
-        );
-        setProgress(92 + Math.round(((index + 1) / stamped.length) * 7), true);
-      }
-    } else if (state.mode === "inpaint" && stamped[0]) {
-      setProgress(92, true);
-      setStatus("正在把截图重绘结果按原选区位置放回...");
-      try {
-        if (inpaintSourceContext?.documentId != null && (
-          getDocumentId(app.activeDocument) !== inpaintSourceContext.documentId ||
-          Math.round(toNumber(app.activeDocument?.width)) !== inpaintSourceContext.width ||
-          Math.round(toNumber(app.activeDocument?.height)) !== inpaintSourceContext.height
-        )) {
-          throw new Error("生成期间目标文档或画布尺寸已改变；请返回原文档并确认后手动导入");
-        }
-        const shouldMaskInpaint = isMaskedInpaintLayerResult(stamped[0]);
-        const directSelectionPatch = isDirectSelectionPatchResult(stamped[0]);
-        const needsPostImportMask = shouldMaskInpaint && !stamped[0].preclippedImport;
-        const placementRect = stamped[0].placementRect || stamped[0].targetRect;
-        await placeResultAsLayer(stamped[0], placementRect, "OpenAI Inpaint", needsPostImportMask ? (stamped[0].cropRect || stamped[0].targetRect) : null, {
-          fitByImageSize: shouldMaskInpaint || directSelectionPatch,
-          pixelExactSelectionPatch: directSelectionPatch,
-          alignVisibleRect: shouldMaskInpaint,
-          preserveImageAspect: false,
-          rasterizeBeforeMask: needsPostImportMask,
-          useCurrentSelectionMask: false,
-          selectionChannelName: needsPostImportMask ? (stamped[0].selectionChannelName || null) : null,
-          useSavedSelectionMask: false,
-          requireMask: needsPostImportMask,
-          moveToFront: true,
-        });
-      } catch (error) {
-        console.error("[inpaint] auto place failed", error);
-        placementWarning = `已生成，但自动放回图层失败：${error.message || error}。请点击下方"导入"`;
-        setStatus(placementWarning);
-      }
-    } else if (state.mode === "outpaint" && stamped[0]) {
-      setProgress(92, true);
-      setStatus("正在扩展 Photoshop 画布并放回扩图结果...");
-      try {
-        await expandCanvasForOutpaint(stamped[0].outpaintPadding, stamped[0].targetRect, stamped[0].outpaintBaseSize);
-        await placeResultAsLayer(stamped[0], stamped[0].placementRect || stamped[0].targetRect, "OpenAI Outpaint", null, {
-          preserveImageAspect: true,
-        });
-      } catch (error) {
-        console.error("[outpaint] auto place failed", error);
-        placementWarning = `已生成，但自动扩展画布失败：${error.message || error}。请点击下方"导入"`;
-        setStatus(placementWarning);
-      }
-    } else if (state.mode === "split" && stamped.length) {
-      setProgress(92, true);
-      const splitLayerKind = stamped.every((item) => item.transparentLayer)
-        ? "透明 PNG"
-        : stamped.some((item) => item.transparentLayer) ? "透明 PNG/白底" : "白底";
-      setStatus(`正在把 ${stamped.length} 个${splitLayerKind}拆图层按原坐标放回 Photoshop...`);
-      for (let index = 0; index < stamped.length; index += 1) {
-        const item = stamped[index];
-        await placeResultAsLayer(item, item.placementRect || item.targetRect, buildSplitLayerName(item, index + 1), null, {
-          fitByImageSize: true,
-          alignVisibleRect: false,
-        });
-        setProgress(92 + Math.round(((index + 1) / stamped.length) * 7), true);
-      }
+    } catch (error) {
+      warning = `已保存 ${stamped.length} 张，自动回填失败：${error.message || error}。可直接导入已保存结果`;
     }
     setProgress(100, true);
-    setStatus(placementWarning || (state.mode === "inpaint"
-      ? (isDirectSelectionPatchResult(stamped[0])
-        ? "完成：已按原选区尺寸直接放回截图重绘结果，原图未变"
-        : "完成：已作为选区保护新图层放回，原图未变")
-      : state.mode === "outpaint"
-      ? "完成：已扩展画布并放回扩图结果"
-      : state.mode === "split"
-      ? `完成：已重绘 ${stamped.length} 个${stamped.every((item) => item.transparentLayer) ? "透明 PNG" : stamped.some((item) => item.transparentLayer) ? "透明 PNG/白底" : "白底"}拆图层并按原坐标放回`
-      : `完成：生成 ${stamped.length} 张`));
+    setStatus(warning || `完成：已保存 ${stamped.length} 张${mode === "reference" ? "，可点击导入" : ""}`);
   } catch (error) {
-    if (isCancelError(error)) {
-      console.warn("[OpenAI Photoshop Generator] generation cancelled");
-      setStatus("已停止");
-    } else {
-      console.error(error);
-      setStatus(`失败：${error.message || error}`);
-    }
+    if (state.activeTask !== task) return;
+    const kept = state.results.length ? `；已保留 ${state.results.length} 张结果，可加载历史或直接导入` : "";
+    setStatus((isCancelError(error) ? "已停止" : `失败：${error.message || error}`) + kept);
+    if (!isCancelError(error)) console.error(error);
   } finally {
-    if (state.activeRequestController === runController) {
+    if (state.activeTask === task) {
+      state.activeTask = null;
       state.activeRequestController = null;
+      state.cancelRequested = false;
+      setBusy(false);
+      window.setTimeout(() => { if (!state.busy) setProgress(0, false); }, 700);
     }
-    state.cancelRequested = false;
-    setBusy(false);
-    window.setTimeout(() => setProgress(0, false), 700);
   }
 }
 
@@ -2149,7 +2049,6 @@ async function requestGenerations(settings, prompt) {
       : "正在调用 OpenAI 文生图...");
     setProgress(64 + Math.round((index / total) * 18), true);
     const batch = await requestSingleGeneration(settings, prompt);
-    throwIfCancelled();
     results.push(...batch);
   }
 
@@ -2157,8 +2056,8 @@ async function requestGenerations(settings, prompt) {
 }
 
 async function requestSingleGeneration(settings, prompt) {
-  if (shouldUseResponsesTextImageGenerationDirectly(settings)) {
-    setStatus("当前 relay 不支持 /images/generations，直接改用 Responses 图像工具生图...");
+  if (gateway.configuration(settings).protocol === "responses") {
+    setStatus("正在使用已配置的 Responses 图像工具生图...");
     return requestResponsesTextImageGeneration(settings, prompt);
   }
 
@@ -2185,47 +2084,11 @@ async function requestSingleGeneration(settings, prompt) {
     timeoutMs: state.requestTimeoutMs || 180000,
   }, "文生图请求");
 
-  if (shouldUseResponsesGenerationFallback(response, settings)) {
-    const detail = await readResponseTextSafe(response);
-    console.warn("[image-generation] /images/generations unavailable; falling back to /responses image_generation", detail);
-    markGenerationEndpointUnsupported(settings);
-    setStatus("当前服务没有 /images/generations，正在改用 Responses 图像工具生图...");
-    return requestResponsesTextImageGeneration(settings, prompt);
-  }
-
   return parseOpenAIImageResponse(response, {
     kind: "文生图",
     endpointPath: settings.generationPath,
     endpointUrl: generationUrl,
   });
-}
-
-function shouldUseResponsesTextImageGenerationDirectly(settings) {
-  if (!settings?.apiKey || !settings?.baseUrl) return false;
-  if (state.unsupportedGenerationEndpoints?.has?.(getGenerationEndpointKey(settings))) return true;
-  return false;
-}
-
-function shouldUseResponsesGenerationFallback(response, settings) {
-  return Boolean(
-    response &&
-    isMissingImageEndpointStatus(response.status) &&
-    /\/images\/generations$/i.test(normalizePath(settings.generationPath || "/images/generations")) &&
-    settings.apiKey &&
-    settings.baseUrl
-  );
-}
-
-function isMissingImageEndpointStatus(status) {
-  return status === 404 || status === 405 || status === 501;
-}
-
-function markGenerationEndpointUnsupported(settings) {
-  state.unsupportedGenerationEndpoints?.add?.(getGenerationEndpointKey(settings));
-}
-
-function getGenerationEndpointKey(settings) {
-  return `${normalizeBaseUrl(settings?.baseUrl || "")}${normalizePath(settings?.generationPath || "/images/generations")}`;
 }
 
 async function requestResponsesTextImageGeneration(settings, prompt) {
@@ -2254,7 +2117,7 @@ async function requestResponsesTextImageGeneration(settings, prompt) {
     ],
     tool_choice: { type: "image_generation" },
   });
-  const { json } = await sendResponsesJsonWithMainModelFallback(settings, buildPayload, {
+  const { json, text, response } = await sendResponsesJsonWithMainModelFallback(settings, buildPayload, {
     kind: "Responses 文生图",
     timeoutMs: state.requestTimeoutMs || 180000,
   });
@@ -2400,7 +2263,7 @@ async function requestSemanticSplitTargetRegions(settings, imageB64, docSize, ta
     },
   };
 
-  const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
+  const response = await sendRequest(buildApiUrl(settings.baseUrl, gateway.configuration(settings).responsesPath), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${settings.apiKey}`,
@@ -2571,7 +2434,7 @@ async function requestGptSplitGroups(settings, imageB64, docSize, userPrompt) {
     },
   };
 
-  const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
+  const response = await sendRequest(buildApiUrl(settings.baseUrl, gateway.configuration(settings).responsesPath), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${settings.apiKey}`,
@@ -2655,7 +2518,7 @@ async function requestGptSplitTargetsForGroup(settings, imageB64, docSize, userP
   };
 
   try {
-    const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
+    const response = await sendRequest(buildApiUrl(settings.baseUrl, gateway.configuration(settings).responsesPath), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${settings.apiKey}`,
@@ -2754,7 +2617,7 @@ async function requestGptFlatSplitTargets(settings, imageB64, docSize, userPromp
 
   try {
     setStatus("正在自动识别画面里应该拆开的元素...");
-    const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
+    const response = await sendRequest(buildApiUrl(settings.baseUrl, gateway.configuration(settings).responsesPath), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${settings.apiKey}`,
@@ -3158,7 +3021,7 @@ async function requestSemanticSplitRedrawRegionChunk(settings, imageB64, docSize
       },
     },
   };
-  const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
+  const response = await sendRequest(buildApiUrl(settings.baseUrl, gateway.configuration(settings).responsesPath), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${settings.apiKey}`,
@@ -3268,7 +3131,7 @@ async function requestSemanticSplitLayerBatchWithRetry(settings, prompt, imageB6
         });
       }
       lastError = error;
-      if (!isTransientSemanticSplitLayerError(error) || attempt >= maxAttempts) {
+      if (error?.outcomeUnknown || isCancelError(error) || !isTransientSemanticSplitLayerError(error) || attempt >= maxAttempts) {
         throw error;
       }
       const delayMs = SEMANTIC_SPLIT_TRANSIENT_RETRY_DELAYS_MS[attempt - 1] || 2000;
@@ -3384,7 +3247,6 @@ async function requestEdits(settings, prompt, imageB64, maskB64, options = {}) {
     setStatus(`正在调用 ${routeLabel} ${index + 1}/${total}...`);
     setProgress(68 + Math.round((index / total) * 14), true);
     const batch = await requestSingleEdit(settings, prompt, imageB64, maskB64, options);
-    throwIfCancelled();
     results.push(...batch);
   }
 
@@ -3392,26 +3254,14 @@ async function requestEdits(settings, prompt, imageB64, maskB64, options = {}) {
 }
 
 async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = {}) {
-  if (shouldUseChatGptStyleResponsesEdit(settings, Boolean(maskB64), options)) {
-    try {
-      setStatus(maskB64
-        ? "正在用 ChatGPT 风格 Responses 图像工具重绘选区..."
-        : "正在用 ChatGPT 风格 Responses 图像工具编辑参考图...");
-      return await requestResponsesImageEditFallback(settings, prompt, imageB64, maskB64, options);
-    } catch (error) {
-      if (!isResponsesEditEndpointUnsupported(error)) {
-        throw error;
-      }
-      if (options.screenshotReferenceEdit || options.manualReferenceEdit) {
-        console.warn("[image-edit] Responses normal-upload edit unavailable; refusing unsafe /images/edits fallback", error?.message || error);
-        const safeError = new Error(`ChatGPT 风格普通上传图片编辑不可用，已停止以避免退回旧的 Mask/兼容编辑路径：${error.message || error}`);
-        safeError.cause = error;
-        throw safeError;
-      }
-      console.warn("[image-edit] Responses image_generation unavailable; falling back to /images/edits", error?.message || error);
-      markResponsesEditEndpointUnsupported(settings);
-      setStatus("Responses 图像工具不可用，降级为 /images/edits 编辑...");
-    }
+  if ((options.screenshotReferenceEdit || options.manualReferenceEdit) && maskB64) {
+    throw new Error("普通上传参考图不能附带 API Mask");
+  }
+  if (gateway.configuration(settings).protocol === "responses") {
+    return requestResponsesImageEditFallback(settings, prompt, imageB64, maskB64, options);
+  }
+  if (options.screenshotReferenceEdit || options.manualReferenceEdit) {
+    prompt = buildResponsesImageEditPrompt(prompt, false, options);
   }
 
   const form = new FormData();
@@ -3495,13 +3345,6 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
       forceXhr: true,
     }, maskB64 ? "局部编辑请求" : "参考图编辑请求");
     setStatus(`模型已返回，正在读取 ${waitLabel} 图片数据...`);
-    if (shouldUseResponsesImageFallback(response, settings, maskB64)) {
-      const detail = await readResponseTextSafe(response);
-      console.warn("[image-edit] /images/edits unavailable; falling back to /responses image_generation", detail);
-      markEditEndpointUnsupported(settings);
-      setStatus("当前服务没有 /images/edits，正在改用 Responses 图像工具编辑参考图...");
-      return await requestResponsesImageEditFallback(settings, prompt, imageB64, maskB64, options);
-    }
     return await parseOpenAIImageResponse(response, {
       kind: maskB64 ? "局部编辑" : "参考图编辑",
       endpointPath: settings.editPath,
@@ -3512,26 +3355,8 @@ async function requestSingleEdit(settings, prompt, imageB64, maskB64, options = 
   }
 }
 
-function shouldUseChatGptStyleResponsesEdit(settings, hasMask = false, options = {}) {
-  if (!settings?.apiKey || !settings?.baseUrl) return false;
-  if (options.screenshotReferenceEdit || options.manualReferenceEdit) return true;
-  if (state.unsupportedResponsesEditEndpoints?.has?.(getResponsesEditEndpointKey(settings))) return false;
-  // Codex sidecar now exposes OpenAI-compatible /images/edits and internally
-  // forwards multipart mask edits through the Responses image toolchain. Prefer
-  // that compatibility endpoint first so response conversion, streaming, usage
-  // capture, and multipart handling stay inside the sidecar.
-  if (shouldUseSidecarImageEndpointsFirst(settings, hasMask)) return false;
-  // Other relays may not expose /images/edits, so keep the direct Responses
-  // image_generation path as a ChatGPT-style fallback for masked edits.
-  if (hasMask) return true;
-  return true;
-}
-
-function shouldUseSidecarImageEndpointsFirst(settings, hasMask = false) {
-  if (!settings?.apiKey || !settings?.baseUrl) return false;
-  if (!isCodexSidecarBaseUrl(settings.baseUrl)) return false;
-  if (state.unsupportedEditEndpoints?.has?.(getEditEndpointKey(settings))) return false;
-  return true;
+function shouldUseSidecarImageEndpointsFirst(settings) {
+  return isCodexSidecarBaseUrl(settings?.baseUrl);
 }
 
 function isCodexSidecarBaseUrl(baseUrl) {
@@ -3540,23 +3365,6 @@ function isCodexSidecarBaseUrl(baseUrl) {
     value === "http://localhost:49456/v1" ||
     value === "http://127.0.0.1:51866/v1" ||
     value === "http://localhost:51866/v1";
-}
-
-function shouldUseResponsesImageGenerationDirectly(settings, maskB64) {
-  if (!maskB64 || !settings?.apiKey || !settings?.baseUrl) return false;
-  if (state.unsupportedEditEndpoints?.has?.(getEditEndpointKey(settings))) return true;
-  return false;
-}
-
-function shouldUseResponsesImageFallback(response, settings, maskB64) {
-  return Boolean(
-    response &&
-    isMissingImageEndpointStatus(response.status) &&
-    /\/images\/edits$/i.test(normalizePath(settings.editPath || "/images/edits")) &&
-    !state.unsupportedResponsesEditEndpoints?.has?.(getResponsesEditEndpointKey(settings)) &&
-    settings.apiKey &&
-    settings.baseUrl
-  );
 }
 
 function getImageEditInputFidelity(model, preserveInput = false) {
@@ -3581,31 +3389,6 @@ function getImageEditInputFidelityDebugMode(model, explicitFidelity = "") {
   if (isGptImage2Model(model)) return "automatic-high";
   return null;
 }
-
-function markEditEndpointUnsupported(settings) {
-  state.unsupportedEditEndpoints?.add?.(getEditEndpointKey(settings));
-}
-
-function getEditEndpointKey(settings) {
-  return `${normalizeBaseUrl(settings?.baseUrl || "")}${normalizePath(settings?.editPath || "/images/edits")}`;
-}
-
-function markResponsesEditEndpointUnsupported(settings) {
-  state.unsupportedResponsesEditEndpoints?.add?.(getResponsesEditEndpointKey(settings));
-}
-
-function getResponsesEditEndpointKey(settings) {
-  return `${normalizeBaseUrl(settings?.baseUrl || "")}/responses`;
-}
-
-function isResponsesEditEndpointUnsupported(error) {
-  const status = Number(error?.status || error?.response?.status || 0);
-  const message = String(error?.message || error?.responseText || "").toLowerCase();
-  if (error?.noImageGenerationCall) return true;
-  return status === 404 ||
-    /endpoint not supported|not_found|not found|unsupported|unknown endpoint|invalid_request_error|没有返回 image_generation_call|no image_generation_call/.test(message);
-}
-
 
 async function requestResponsesImageEditFallback(settings, prompt, imageB64, maskB64, options = {}) {
   const imageBytes = estimateBase64Bytes(imageB64);
@@ -3653,7 +3436,7 @@ async function requestResponsesImageEditFallback(settings, prompt, imageB64, mas
     ],
     tool_choice: { type: "image_generation" },
   });
-  const initialPayload = buildPayload(DEFAULT_SEMANTIC_EDIT_MODEL);
+  const initialPayload = buildPayload(gateway.configuration(settings).responsesModel);
 
   if ((options.screenshotReferenceEdit || options.manualReferenceEdit) && initialPayload.tools?.some?.((tool) => tool?.input_image_mask)) {
     throw new Error("普通上传参考图请求意外包含 API Mask，已停止发送以避免走错旧重绘路径");
@@ -3671,7 +3454,7 @@ async function requestResponsesImageEditFallback(settings, prompt, imageB64, mas
     imageFormat,
     maskFormat: maskB64 ? maskFormat : null,
     mainModel: initialPayload.model,
-    mainModelFallbacks: getResponsesMainModelCandidates().filter((model) => model !== initialPayload.model),
+    mainModelFallbacks: getResponsesMainModelCandidates(settings).filter((model) => model !== initialPayload.model),
     imageToolModel: initialPayload.tools?.[0]?.model || null,
     imageToolAction: initialPayload.tools?.[0]?.action || null,
     imageToolSize: initialPayload.tools?.[0]?.size || null,
@@ -3696,7 +3479,7 @@ async function requestResponsesImageEditFallback(settings, prompt, imageB64, mas
       ? `正在用 Responses 图像工具按普通上传参考图编辑：图像 ${formatBytes(imageBytes)}，无 API Mask`
       : `正在用 Responses 图像工具编辑参考图：图像 ${formatBytes(imageBytes)}，无 API Mask`;
   setStatus(uploadStatus);
-  const { json } = await sendResponsesJsonWithMainModelFallback(settings, buildPayload, {
+  const { json, text, response } = await sendResponsesJsonWithMainModelFallback(settings, buildPayload, {
     kind: "Responses 图像重绘",
     timeoutMs: options.timeoutMs || state.requestTimeoutMs || 12 * 60 * 1000,
   });
@@ -3706,7 +3489,7 @@ async function requestResponsesImageEditFallback(settings, prompt, imageB64, mas
   });
   if (!items.length) {
     const error = createNoResponsesImageError("Responses 图像重绘", json, text, response);
-    console.warn("[responses-edit] no image_generation_call; falling back when possible", {
+    console.warn("[responses-edit] no image_generation_call in configured protocol", {
       outputTypes: error.responsesOutputTypes,
       outputText: extractResponsesOutputText(json).slice(0, 240),
     });
@@ -3715,8 +3498,8 @@ async function requestResponsesImageEditFallback(settings, prompt, imageB64, mas
   return items;
 }
 
-function getResponsesMainModelCandidates() {
-  return [...new Set(RESPONSES_MAIN_MODEL_FALLBACKS.filter(Boolean))];
+function getResponsesMainModelCandidates(settings = {}) {
+  return [gateway.configuration(settings).responsesModel];
 }
 
 function isResponsesMainModelUnavailable(json, rawText = "") {
@@ -3732,58 +3515,31 @@ function isResponsesMainModelUnavailable(json, rawText = "") {
   return /model_not_available|model_not_found|model_not_found_error|model_not_exist|model.*not.*available|model.*not.*found|does not have access to model|do not have access to model|invalid.*model/.test(text);
 }
 
+// Kept under its original helper name for the existing host diagnostics.
+// The explicit gateway contract supplies exactly one controller; no rotation.
 async function sendResponsesJsonWithMainModelFallback(settings, buildPayload, options = {}) {
-  const candidates = getResponsesMainModelCandidates();
+  const config = gateway.configuration(settings);
+  const mainModel = config.responsesModel;
   const kind = options.kind || "Responses 请求";
-  let lastError = null;
-
-  for (let index = 0; index < candidates.length; index += 1) {
-    const mainModel = candidates[index];
-    const payload = buildPayload(mainModel);
-    const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${settings.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-      timeoutMs: options.timeoutMs || state.requestTimeoutMs || 180000,
-    }, kind);
-
-    const text = await response.text();
-    const json = parseResponsesJsonText(text);
-    if (!json) {
-      const error = new Error(`${kind}返回异常：${text.slice(0, 300)}`);
-      error.status = response.status;
-      error.responseText = text;
-      throw error;
-    }
-
-    if (response.ok) {
-      return { response, text, json, payload, mainModel };
-    }
-
-    const error = new Error(formatOpenAIResponseError(response, formatOpenAIError(json, response.statusText), {
-      kind,
-      endpointPath: "/responses",
-      endpointUrl: buildApiUrl(settings.baseUrl, "/responses"),
-    }));
-    error.status = response.status;
-    error.responseText = text;
-    error.responsesMainModel = mainModel;
-    lastError = error;
-
-    if (index < candidates.length - 1 && isResponsesMainModelUnavailable(json, text)) {
-      const nextModel = candidates[index + 1];
-      console.warn(`[responses] main model ${mainModel} unavailable; retrying with ${nextModel}`);
-      setStatus(`${kind}主控模型 ${mainModel} 不可用，正在改用 ${nextModel} 重试...`);
-      continue;
-    }
-
-    throw error;
-  }
-
-  throw lastError || new Error(`${kind}失败：没有可用的 Responses 主控模型`);
+  const payload = buildPayload(mainModel);
+  const response = await sendRequest(buildApiUrl(settings.baseUrl, config.responsesPath), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${settings.apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    timeoutMs: options.timeoutMs || state.requestTimeoutMs || 180000,
+  }, kind);
+  const text = await response.text();
+  const json = parseResponsesJsonText(text);
+  if (response.ok && json) return { response, text, json, payload, mainModel };
+  const error = new Error(json
+    ? formatOpenAIResponseError(response, formatOpenAIError(json, response.statusText), {
+        kind, endpointPath: config.responsesPath, endpointUrl: buildApiUrl(settings.baseUrl, config.responsesPath),
+      })
+    : `${kind}返回异常：${text.slice(0, 300)}`);
+  error.status = response.status;
+  error.responseText = text;
+  error.responsesMainModel = mainModel;
+  throw error;
 }
 
 function createNoResponsesImageError(kind, json, rawText, response = {}) {
@@ -3805,8 +3561,7 @@ function createNoResponsesImageError(kind, json, rawText, response = {}) {
 
 function getResponsesImageToolModel(model) {
   const value = String(model || "").trim();
-  if (/^(?:gpt-image|chatgpt-image)/i.test(value)) return value;
-  return "";
+  return value;
 }
 
 function buildResponsesImageEditPrompt(prompt, hasMask, options = {}) {
@@ -4786,12 +4541,11 @@ function formatOpenAIResponseError(response, detail, context = {}) {
     return "HTTP " + response.status + ": " + message + "。当前 Sub2API API Key 所属分组未开启图片生成权限，请在 Sub2API 管理后台编辑该分组并打开“允许图片生成”后重试。";
   }
 
-  if (response.status === 404 && /\/images\/edits$/i.test(path)) {
-    return `${base}。${kind}需要图片编辑接口 ${path}；选区重绘会走 /responses 普通上传截图，不依赖 /images/edits mask 上传。请把 Base URL 指向支持该编辑接口的服务，或在设置里改成该服务真实的编辑路径。`;
+  if (response.status === 404 && /model_not_found|model_not_available|model.*not.*found|model.*not.*available/i.test(message)) {
+    return `${base}。请核对当前网关的 Model ID 和模型访问权限；已保留配置的协议与模型`;
   }
-
-  if (response.status === 404 && /\/images\/generations$/i.test(path)) {
-    return `${base}。当前服务没有找到文生图接口 ${path}，请检查 Base URL 和 Image Gen Path。`;
+  if (response.status === 404 && path) {
+    return `${base}。请核对当前协议、Base URL 与已配置的接口路径 ${path}`;
   }
 
   return base;
@@ -4806,96 +4560,69 @@ async function readResponseTextSafe(response) {
 }
 
 async function sendRequest(url, options = {}, label = "请求") {
-  throwIfCancelled();
-  const { responseType, timeoutMs = 180000, forceXhr = false, signal: explicitSignal, ...fetchOptions } = options;
-  const signal = explicitSignal || getActiveAbortSignal();
-  if (signal && !fetchOptions.signal) {
-    fetchOptions.signal = signal;
-  }
-  if (forceXhr && typeof XMLHttpRequest !== "undefined") {
-    try {
-      return await sendXhrRequest(url, { responseType, timeoutMs, signal, ...fetchOptions });
-    } catch (xhrError) {
-      if (isCancelError(xhrError)) throw xhrError;
-      console.warn(`[request] XHR failed for ${label}; retrying with fetch`, xhrError);
-      try {
-        return await fetchWithTimeout(url, fetchOptions, timeoutMs);
-      } catch (fetchError) {
-        if (isCancelError(fetchError)) throw fetchError;
-        throw makeNetworkError(fetchError, url, label);
-      }
-    }
-  }
-
+  const { responseType, timeoutMs = 180000, forceXhr = false, signal: explicitSignal, ignoreCancellation = false, ...fetchOptions } = options;
+  if (!ignoreCancellation) throwIfCancelled();
+  const signal = explicitSignal || (ignoreCancellation ? null : getActiveAbortSignal());
+  if (signal) fetchOptions.signal = signal;
   try {
-    return await fetchWithTimeout(url, fetchOptions, timeoutMs);
-  } catch (fetchError) {
-    if (isCancelError(fetchError)) throw fetchError;
-    if (fetchError?.name === "RequestTimeoutError") {
-      throw makeNetworkError(fetchError, url, label);
-    }
-    if (typeof XMLHttpRequest === "undefined") {
-      throw makeNetworkError(fetchError, url, label);
-    }
-
-    try {
+    // A transport failure cannot prove that a billable POST was not accepted.
+    // Select the available transport once; never resubmit through another one.
+    if ((forceXhr || typeof fetch === "undefined" || typeof AbortController === "undefined") && typeof XMLHttpRequest !== "undefined") {
       return await sendXhrRequest(url, { responseType, timeoutMs, signal, ...fetchOptions });
-    } catch (xhrError) {
-      if (isCancelError(xhrError)) throw xhrError;
-      throw makeNetworkError(xhrError, url, label);
     }
+    return await fetchWithTimeout(url, fetchOptions, timeoutMs, responseType);
+  } catch (error) {
+    if (error?.isUserCancelled || error?.name === "AbortError") throw error;
+    const wrapped = makeNetworkError(error, url, label);
+    if ((options.method || "GET").toUpperCase() === "POST") {
+      wrapped.outcomeUnknown = true;
+      wrapped.message += "。提交结果未知，为避免重复生成未自动重试";
+    }
+    throw wrapped;
   }
 }
 
-function fetchWithTimeout(url, options, timeoutMs) {
-  const signal = options?.signal;
-  if (signal?.aborted) {
-    return Promise.reject(makeCancelError());
-  }
-  if (!timeoutMs || timeoutMs <= 0) {
-    return fetch(url, options);
-  }
-
+function fetchWithTimeout(url, options = {}, timeoutMs = 180000, responseType) {
+  const external = options.signal;
+  if (external?.aborted) return Promise.reject(makeCancelError());
+  const controller = createAbortController();
   return new Promise((resolve, reject) => {
     let settled = false;
-    const timer = window.setTimeout(() => {
+    let timer = null;
+    const cleanup = () => {
+      if (timer) window.clearTimeout(timer);
+      external?.removeEventListener?.("abort", onAbort);
+    };
+    const finish = (fn, value) => {
       if (settled) return;
       settled = true;
       cleanup();
-      const error = new Error(`request timeout after ${Math.round(timeoutMs / 1000)}s`);
-      error.name = "RequestTimeoutError";
-      reject(error);
-    }, timeoutMs);
-    const cleanup = () => {
-      window.clearTimeout(timer);
-      try {
-        signal?.removeEventListener?.("abort", onAbort);
-      } catch (error) {
-        // ignore cleanup failure
-      }
+      fn(value);
     };
     const onAbort = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(makeCancelError());
+      controller?.abort();
+      finish(reject, makeCancelError());
     };
-    signal?.addEventListener?.("abort", onAbort, { once: true });
-
-    fetch(url, options).then(
-      (response) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve(response);
-      },
-      (error) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(isCancelError(error) ? makeCancelError() : error);
-      },
-    );
+    external?.addEventListener?.("abort", onAbort, { once: true });
+    if (timeoutMs > 0) timer = window.setTimeout(() => {
+      const error = new Error(`request timeout after ${Math.round(timeoutMs / 1000)}s`);
+      error.name = "RequestTimeoutError";
+      // Settle with a timeout before aborting, so it cannot become user cancel.
+      finish(reject, error);
+      controller?.abort();
+    }, timeoutMs);
+    Promise.resolve().then(async () => {
+      const response = await fetch(url, { ...options, signal: controller?.signal || external });
+      // Include the body in the deadline: a gateway may send headers long before
+      // the final image. Consumers get a fully materialized response.
+      const data = responseType === "arraybuffer" ? await response.arrayBuffer() : await response.text();
+      return {
+        ok: response.ok, status: response.status, statusText: response.statusText,
+        headers: response.headers,
+        text: async () => typeof data === "string" ? data : "",
+        arrayBuffer: async () => data instanceof ArrayBuffer ? data : new ArrayBuffer(0),
+      };
+    }).then(value => finish(resolve, value), error => finish(reject, error));
   });
 }
 
@@ -5625,11 +5352,14 @@ async function cropDocumentToRect(documentRef, rect) {
 }
 
 async function importSelected() {
+  if (state.busy) return;
   const item = getSelectedResult();
   if (!item) return;
 
   try {
     setBusy(true);
+    if (item.pendingProcessing) throw new Error("原始结果已保存，但尺寸处理未完成；请保留历史中的原图，不能直接按旧选区回填");
+    assertResultDocument(item);
     const isSplitElement = item.mode === "split";
     const shouldForceCapturedSelection = isCapturedRegionResult(item);
     const shouldFit = isSplitElement || shouldForceCapturedSelection || $("fitSelectionInput").checked;
@@ -5689,7 +5419,7 @@ async function importSelected() {
     }
     const needsPostImportMask = isMaskedInpaintLayerResult(itemToPlace) && !itemToPlace.preclippedImport;
     if (item.mode === "outpaint") {
-      await expandCanvasForOutpaint(item.outpaintPadding, item.targetRect || item.placementRect, item.outpaintBaseSize);
+      await expandCanvasForOutpaint(item.outpaintPadding, item.targetRect || item.placementRect, item.outpaintBaseSize, item);
     }
     const directSelectionPatch = isDirectSelectionPatchResult(itemToPlace);
     const alphaStylePatch = itemToPlace?.placementMode === "alpha-style-patch";
@@ -5756,6 +5486,7 @@ function assertDirectSelectionPatchPlacementRatio(item, imageSize, placementRect
 }
 
 async function placeResultAsLayer(item, selectionInfo, layerName, cropRect = null, opts = {}) {
+  assertResultDocument(item);
   // A replacement screenshot is not a smart-object fit operation. Its canvas,
   // including transparent margins, is already aligned to the captured selection.
   if (isDirectSelectionPatchResult(item)) {
@@ -5811,6 +5542,7 @@ async function placeResultAsLayer(item, selectionInfo, layerName, cropRect = nul
 
   let importedLayer;
   await core.executeAsModal(async () => {
+    assertResultDocument(item);
     if (opts.moveToFront) {
       try {
         await selectFrontLayerForPlacementInModal();
@@ -5936,6 +5668,7 @@ function makeOutsideSelectionMask(docSize, rect) {
 }
 
 async function placeDirectSelectionPatch(item, selectionInfo, layerName) {
+  assertResultDocument(item);
   const targetDocument = app.activeDocument;
   if (!targetDocument || !isSelectionValid(selectionInfo)) {
     throw new Error("截图重绘需要打开目标文档和有效的原选区位置");
@@ -5981,6 +5714,7 @@ async function placeDirectSelectionPatch(item, selectionInfo, layerName) {
       });
     }
     await core.executeAsModal(async (executionContext) => {
+      assertResultDocument(item);
       if (getDocumentId(app.activeDocument) !== getDocumentId(targetDocument)) {
         throw new Error("当前文档已切换，未把重绘结果写入其他文档");
       }
@@ -6369,7 +6103,7 @@ async function transformLayerByImageAspect(layer, imageSize, targetRect) {
   }, { commandName: "Place OpenAI cutout 1:1" });
 }
 
-async function resultToArrayBuffer(item, preferImport = false) {
+async function resultToArrayBuffer(item, preferImport = false, options = {}) {
   const itemB64 = preferImport && item.importB64 ? item.importB64 : item.b64;
   if (itemB64) {
     if (typeof itemB64 !== "string") {
@@ -6379,7 +6113,7 @@ async function resultToArrayBuffer(item, preferImport = false) {
   }
 
   if (item.url) {
-    const response = await sendRequest(item.url, { responseType: "arraybuffer" }, "下载结果");
+    const response = await sendRequest(item.url, { responseType: "arraybuffer", ...options }, "下载结果");
     if (!response.ok) {
       throw new Error(`下载结果失败：HTTP ${response.status}`);
     }
@@ -7798,7 +7532,7 @@ async function requestSemanticInpaintTargetPlan(settings, prompt, imageB64) {
     },
   };
 
-  const response = await sendRequest(buildApiUrl(settings.baseUrl, "/responses"), {
+  const response = await sendRequest(buildApiUrl(settings.baseUrl, gateway.configuration(settings).responsesPath), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${settings.apiKey}`,
@@ -7864,8 +7598,7 @@ async function createReferenceRegionInputs(selection, docSize, model) {
   };
 }
 
-async function createManualReferenceInputs(settings) {
-  const reference = state.manualReferenceImage;
+async function createManualReferenceInputs(settings, reference = state.manualReferenceImage) {
   if (!reference?.b64) {
     throw new Error("请先选择一张参考图");
   }
@@ -8407,7 +8140,8 @@ function createOutpaintMaskBase64(width, height, docSize, padding) {
   return bytesToBase64(encodePngRgba(width, height, rgba));
 }
 
-async function expandCanvasForOutpaint(padding, targetRect, baseSize = null) {
+async function expandCanvasForOutpaint(padding, targetRect, baseSize = null, item = null) {
+  assertResultDocument(item);
   if (!app.activeDocument || !padding || !isSelectionValid(targetRect)) return;
 
   const left = clampInteger(padding.left, 0, 1600, 0);
@@ -8431,6 +8165,7 @@ async function expandCanvasForOutpaint(padding, targetRect, baseSize = null) {
   }
 
   await core.executeAsModal(async () => {
+    assertResultDocument(item);
     const doc = app.activeDocument;
     const startWidth = Math.round(toNumber(doc.width));
     const startHeight = Math.round(toNumber(doc.height));
@@ -8486,6 +8221,7 @@ async function applySelectionRatioToSize() {
 function renderResults() {
   $("resultCount").textContent = `${state.results.length}`;
   $("importSelectedBtn").disabled = !state.selectedId || state.busy;
+  $("bindResultDocumentBtn").disabled = !state.selectedId || state.busy;
   renderSelectedPreview();
   renderGrid($("resultGrid"), state.results, true);
   renderOutputView();
@@ -8610,17 +8346,17 @@ function describeItem(item) {
   return stamp ? `${label} · ${stamp}` : label;
 }
 
-async function saveHistoryItem(item) {
+async function saveHistoryItem(item, options = {}) {
   try {
     const savedImportBytes = Boolean(item.importB64);
     const previousB64 = item.b64 || "";
     const previousImportB64 = item.importB64 || "";
     const previousUrl = item.url || null;
     const previousFormat = item.format || "";
-    const binary = await resultToArrayBuffer(item, true);
+    const binary = await resultToArrayBuffer(item, true, { ignoreCancellation: true });
     const folder = await getHistoryFolder();
     const format = inferImageFormatFromBytes(new Uint8Array(binary)) || detectFormatFromResult(item);
-    const fileName = `${item.id}.${format}`;
+    const fileName = `${item.id}${item.pendingProcessing ? ".raw" : ""}.${format}`;
     const file = await folder.createFile(fileName, { overwrite: true });
     await file.write(binary, { format: storage.formats.binary });
     const savedB64 = arrayBufferToBase64(binary);
@@ -8666,27 +8402,45 @@ async function saveHistoryItem(item) {
       whiteMatteLayer: Boolean(item.whiteMatteLayer),
       transparentLayer: Boolean(item.transparentLayer),
       preclippedImport: Boolean(item.preclippedImport),
-      previewB64: item.previewB64 || null,
+      previewB64: null,
       previewBounds: item.previewBounds || null,
+      sourceContext: item.sourceContext || null,
+      taskId: item.taskId || null,
+      pendingProcessing: Boolean(item.pendingProcessing),
       createdAt: item.createdAt,
+
     };
-    const index = readJsonLocal(HISTORY_KEY, []);
-    localStorage.setItem(HISTORY_KEY, JSON.stringify([record, ...index].slice(0, 40)));
+    // The sidecar is the durable record. localStorage is only a fast index;
+    // quota, a corrupt index, or a panel reload cannot orphan accepted images.
+    const sidecar = await folder.createFile(`${item.id}.json`, { overwrite: true });
+    await sidecar.write(JSON.stringify(record));
+    item.persisted = true;
+    item.storageError = null;
+    const storedIndex = readJsonLocal(HISTORY_KEY, []);
+    const index = Array.isArray(storedIndex) ? storedIndex.filter(entry => entry?.id) : [];
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify([record, ...index.filter(entry => entry.id !== record.id)].slice(0, 40)));
+    } catch (error) {
+      console.warn("History index unavailable; result is recoverable from its sidecar", error);
+    }
     return materializedCurrentResult;
   } catch (error) {
+    item.storageError = error.message || String(error);
     console.warn("saveHistoryItem failed", error);
+    if (options.strict) throw new Error(`结果保存失败，已停止后续生成；当前图片仍在结果列表：${item.storageError}`);
     return false;
   }
 }
 
 async function loadHistory() {
   try {
-    const index = readJsonLocal(HISTORY_KEY, []);
     const folder = await getHistoryFolder();
+    const index = await readHistoryRecords(folder);
     const loaded = [];
 
-    for (const record of index.slice(0, 20)) {
+    for (const record of index.slice(0, 40)) {
       try {
+        if (!record.fileName || /[/\\]/.test(record.fileName)) continue;
         const file = await folder.getEntry(record.fileName);
         const buffer = await file.read({ format: storage.formats.binary });
         const b64 = arrayBufferToBase64(buffer);
@@ -8711,6 +8465,7 @@ async function loadHistory() {
       }
     }
 
+    await prepareCroppedPreviews(loaded);
     state.history = loaded;
     state.outputView = "history";
     renderHistory();
@@ -8720,11 +8475,39 @@ async function loadHistory() {
   }
 }
 
+async function readHistoryRecords(folder) {
+  const byId = new Map();
+  const index = readJsonLocal(HISTORY_KEY, []);
+  for (const record of Array.isArray(index) ? index : []) {
+    if (record?.id && record.fileName) byId.set(record.id, record);
+  }
+  if (typeof folder.getEntries === "function") {
+    for (const file of await folder.getEntries()) {
+      if (!/^[\w.-]+\.json$/.test(file.name) || file.name === "history-state.json") continue;
+      try {
+        const record = JSON.parse(await file.read());
+        if (record.id && record.fileName) byId.set(record.id, record);
+      } catch (error) { console.warn("Unreadable history metadata", file.name); }
+    }
+  }
+  let clearedAt = 0;
+  try { clearedAt = JSON.parse(await (await folder.getEntry("history-state.json")).read()).clearedAt || 0; }
+  catch (error) { /* No explicit clear marker in older installations. */ }
+  return [...byId.values()].filter(record => !clearedAt || Date.parse(record.createdAt) > clearedAt)
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+}
+
 async function clearHistory() {
-  localStorage.setItem(HISTORY_KEY, "[]");
-  state.history = [];
-  renderHistory();
-  setStatus("历史已清空");
+  if (state.busy) return;
+  try {
+    const folder = await getHistoryFolder();
+    const marker = await folder.createFile("history-state.json", { overwrite: true });
+    await marker.write(JSON.stringify({ clearedAt: Date.now() }));
+    try { localStorage.setItem(HISTORY_KEY, "[]"); } catch (error) { /* Sidecar clear marker is authoritative. */ }
+    state.history = [];
+    renderHistory();
+    setStatus("历史列表已清空");
+  } catch (error) { setStatus(`清空历史失败：${error.message || error}`); }
 }
 
 async function getHistoryFolder() {
@@ -8774,6 +8557,7 @@ function setBusy(busy) {
   $("cancelRequestBtn").disabled = !busy;
   $("cancelRequestBtn").classList.toggle("hidden", !busy);
   $("importSelectedBtn").disabled = busy || !state.selectedId;
+  $("bindResultDocumentBtn").disabled = busy || !state.selectedId;
   $("clearResultsBtn").disabled = busy;
   $("saveSettingsBtn").disabled = busy;
   $("testConnectionBtn").disabled = busy;
@@ -9998,7 +9782,6 @@ function cleanObject(object) {
 
 function normalizeBaseUrl(value) {
   let url = String(value || "").trim().replace(/\/+$/, "");
-  url = url.replace(/^(https?:\/\/)(?:localhost|127\.0\.0\.1):9456(\/|$)/i, "http://127.0.0.1:49456$2");
   url = url.replace(/\/(?:chat\/completions|images\/generations|images\/edits|models)$/i, "");
   return url.replace(/\/+$/, "");
 }

@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.314] - 2026-10-21
+
+### Added
+
+- Explicit OpenAI-compatible gateway configuration: Images API or Responses, custom endpoint paths, Responses controller, and fast/deep image-model aliases. Model IDs and configured ports are preserved; authentication import no longer redirects a gateway to the official API.
+- Generation tasks capture mode, parameters, source document/canvas, selection, reference image and outpaint margins. Source binding and task identity prevent stale or cancelled work from changing another document or a newer task. Historical results can be explicitly bound to a compatible current document.
+- Every returned image is saved before normalization, preview or placement, with a durable JSON sidecar. Partial batches survive later failures and cancellation, accepted raw images survive processing errors, and history can recover without its localStorage index. Failed placement can reuse the saved output without generating again.
+- Added offline gateway/task regressions and a loopback HTTP contract test for JSON generation and no-mask multipart editing.
+
+### Fixed
+
+- Removed endpoint-status/port-driven protocol fallbacks and implicit Responses controller rotation. A model 404 no longer disables a working endpoint or changes subsequent routes.
+- A network error or timeout no longer resubmits generation through a second transport. Fetch deadlines abort the actual request and cover response-body reading; user cancellation remains distinct.
+- Responses returning text without images now report their real no-image error instead of a ReferenceError.
+- Result metadata updates deduplicate history entries, avoid image base64 in the index, and expose storage failures before starting another request. Clearing the history list also prevents sidecar recovery from restoring cleared entries.
+
+### Preserved
+
+- Existing native Alpha interpolation, screenshot normalization, precise RGBA placement, transparent source masking and atomic inpaint rollback are unchanged.
+- Existing histories remain readable. This release does not delete historical image files; cache reclamation is a separate maintenance operation.
+
 ## [0.1.313] - 2026-09-19
 
 ### Fixed

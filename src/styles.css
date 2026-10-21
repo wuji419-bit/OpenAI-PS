@@ -3009,3 +3009,11 @@ button:disabled {
   max-width: 220px !important;
   margin: 4px 0 0 !important;
 }
+
+/* Keep explicit result binding separate from the legacy two-button action row. */
+#bindResultDocumentBtn {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  min-height: 28px;
+}

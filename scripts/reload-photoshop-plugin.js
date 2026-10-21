@@ -7,7 +7,7 @@ const os = require("os");
 const path = require("path");
 
 const root = path.resolve(__dirname, "..");
-const defaultPluginPath = "/private/tmp/openai-photoshop-generator-dev";
+const defaultPluginPath = root;
 const pluginPath = path.resolve(process.argv[2] || defaultPluginPath);
 const port = Number(process.env.UXP_DEVTOOLS_PORT || 14001);
 const host = process.env.UXP_DEVTOOLS_HOST || "127.0.0.1";

@@ -1,12 +1,13 @@
 {
   "name": "openai-photoshop-generator",
-  "version": "0.1.313",
+  "version": "0.1.314",
   "private": true,
   "description": "OpenAI Photoshop Generator UXP plugin packaging helpers.",
   "scripts": {
-    "check": "node --check src/app.js && node --check scripts/smoke-plugin.js && node --check scripts/test-native-transparency.js && node --check scripts/audit-plugin-state.js && node --check scripts/run-photoshop-smoke.js && node --check scripts/sync-runtime-copies.js && node --check scripts/build-windows-installer.js && node --check installer/windows-installer-runtime.cjs",
-    "smoke": "node scripts/smoke-plugin.js && node scripts/test-native-transparency.js",
+    "check": "node --check src/app.js && node --check src/gateway.js && node --check scripts/test-gateway-tasks.js && node --check scripts/smoke-plugin.js && node --check scripts/test-native-transparency.js && node --check scripts/audit-plugin-state.js && node --check scripts/run-photoshop-smoke.js && node --check scripts/sync-runtime-copies.js && node --check scripts/build-windows-installer.js && node --check installer/windows-installer-runtime.cjs",
+    "smoke": "node scripts/smoke-plugin.js && node scripts/test-native-transparency.js && node scripts/test-gateway-tasks.js",
     "build:windows-installer": "node scripts/build-windows-installer.js",
+    "test:gateway": "node scripts/test-gateway-tasks.js",
     "test:alpha": "node scripts/test-native-transparency.js"
   },
   "devDependencies": {

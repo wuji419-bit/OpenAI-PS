@@ -62,7 +62,7 @@ function checkRuntimeCopiesSynced() {
 
   for (const copyDir of copyDirs) {
     if (!isPluginDir(copyDir) || path.resolve(copyDir) === rootDir) continue;
-    for (const file of ["manifest.json", "index.html", "CHANGELOG.md", "README_CN.md", "README.md", "package.json", "docs/openai-image-flow.md", "src/app.js", "src/styles.css", "scripts/smoke-plugin.js", "scripts/test-native-transparency.js", "scripts/audit-plugin-state.js", "scripts/reload-photoshop-plugin.js", "scripts/restart-photoshop-and-smoke.js", "scripts/run-photoshop-smoke.js", "scripts/sync-runtime-copies.js"]) {
+    for (const file of ["manifest.json", "index.html", "CHANGELOG.md", "README_CN.md", "README.md", "package.json", "docs/openai-image-flow.md", "src/app.js", "src/gateway.js", "src/styles.css", "scripts/smoke-plugin.js", "scripts/test-native-transparency.js", "scripts/test-gateway-tasks.js", "scripts/audit-plugin-state.js", "scripts/reload-photoshop-plugin.js", "scripts/restart-photoshop-and-smoke.js", "scripts/run-photoshop-smoke.js", "scripts/sync-runtime-copies.js"]) {
       const sourceText = fs.readFileSync(path.join(rootDir, file), "utf8");
       const copyPath = path.join(copyDir, file);
       assert(fs.existsSync(copyPath), `Missing runtime copy file: ${copyPath}`);
@@ -249,7 +249,7 @@ function checkRuntimeReloadScript() {
   assert(appJs.includes("refineSemanticSplitTargetsWithPhotoshop"), "Split mode should tighten candidate matches with Photoshop Select Subject before placement");
   assert(appJs.includes('_obj: "autoCutout"'), "Photoshop semantic split refinement should invoke the host Select Subject command");
   assert(appJs.includes("lockWhiteRedrawToSemanticRegion"), "Split mode should hard-lock redraw pixels back into the detected original region");
-  assert(appJs.includes("for (const item of stamped)"), "Result history should save sibling split layers sequentially");
+  assert(appJs.includes("await saveHistoryItem(item, { strict: true })"), "Received results must be durably saved before further processing");
   assert(appJs.includes("loadImage(toDataUrl(generatedB64"), "Inpaint composite should load model output with inferred image format");
   assert(!appJs.includes("loadImage(`data:image/png;base64,${stripDataUrl(generatedB64)}`)"), "Inpaint composite must not force model output through PNG data URLs");
   assert(appJs.includes("loadImage(toDataUrl(imageB64, inferImageFormatFromValue(imageB64)"), "Inpaint clip fallback should load model output with inferred image format");
@@ -265,7 +265,7 @@ function checkPhotoshopMoveUnavailableGuard() {
 
 function checkSelectionRepaintCopy() {
   assert(appJs.includes("按普通上传图片编辑；不发送 API Mask"), "Inpaint mode copy must describe the current no-mask uploaded-screenshot workflow");
-  assert(html.includes("选区重绘按选区截图（保留透明通道）直接上传编辑，不发送 API Mask") || html.includes("选区重绘会按白底截图普通上传，不发送 API Mask"), "Selection context copy must not describe inpaint as API mask upload");
+  assert(html.includes("不发送 API Mask") && html.includes("保留透明通道"), "Selection context must describe no-mask editing with Alpha preserved");
   assert(!appJs.includes("基于当前 Photoshop 选区生成像素蒙版"), "Inpaint mode copy must not use the old pixel-mask wording");
   assert(!appJs.includes("使用你画的完整选区作为重绘 Mask"), "Inpaint status must not call screenshot repaint a mask");
   assert(!appJs.includes("选区保护图层"), "Inpaint status text must not use ambiguous legacy selection-protection wording");
@@ -282,7 +282,7 @@ function checkSelectionRepaintCopy() {
   assert(appJs.includes("普通上传参考图请求意外包含 API Mask"), "Normal-upload reference and screenshot repaint should stop if a future regression tries to attach an API mask");
   assert(appJs.includes("getImageEditInputFidelity(settings.model, true)"), "Image edit requests should enable high input fidelity for GPT Image reference preservation");
   assert(!appJs.includes("重绘还需要服务支持 /images/edits"), "Connection status must not say selection repaint depends on /images/edits");
-  assert(appJs.includes("选区重绘需要 /responses 图像工具"), "Connection status should name the Responses image tool for selection repaint");
+  assert(appJs.includes("图片能力需以实际请求为准"), "A models probe must not imply generation capability");
 }
 
 function makeElement(id = "") {
@@ -358,6 +358,8 @@ function createContext() {
 
   const makeFile = (name) => ({
     name,
+    isFile: true,
+    text: null,
     data: new ArrayBuffer(0),
     async write(value) {
       if (value instanceof ArrayBuffer) {
@@ -368,10 +370,12 @@ function createContext() {
         this.data = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
         return;
       }
-      this.data = Buffer.from(String(value || "")).buffer;
+      this.text = String(value || "");
+      const bytes = Buffer.from(this.text);
+      this.data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     },
-    async read() {
-      return this.data;
+    async read(options = {}) {
+      return options.format === "binary" || this.text == null ? this.data : this.text;
     },
   });
   const makeFolder = () => {
@@ -382,6 +386,7 @@ function createContext() {
         entries.set(name, file);
         return file;
       },
+      async getEntries() { return [...entries.values()]; },
       async getEntry(name) {
         if (!entries.has(name)) throw new Error(`Missing mock entry: ${name}`);
         return entries.get(name);
@@ -438,6 +443,7 @@ function createContext() {
           storage: { localFileSystem, formats: { binary: "binary" } },
         };
       }
+      if (name.startsWith("./")) return require(path.join(root, "src", name));
       return require(name);
     },
     document: {
@@ -511,6 +517,7 @@ async function runVmSmoke() {
 
       $("baseUrlInput").value = "http://127.0.0.1:49456/v1";
       $("apiKeyInput").value = "sk-test-key-abcdefghijklmnop";
+      $("apiProtocolInput").value = "responses";
       $("modelInput").value = "gpt-image-2";
       $("generationPathInput").value = "/images/generations";
       $("editPathInput").value = "/images/edits";
@@ -652,11 +659,11 @@ async function runVmSmoke() {
       assert(DEFAULT_BASE_URL === "http://127.0.0.1:49456/v1", "Default Base URL should match the active Cockpit API service");
       assert(DEFAULT_SEMANTIC_EDIT_MODEL === "gpt-5.5", "Responses image tool requests should default to the expected mainline model");
       assert(DEFAULT_CUTOUT_ANALYSIS_MODEL === "gpt-5.5", "Semantic analysis requests should default to the expected mainline model");
-      assert(getResponsesMainModelCandidates()[0] === "gpt-5.5" && getResponsesMainModelCandidates().includes("gpt-5"), "Responses main model fallback list should try gpt-5.5 before compatibility fallbacks");
+      assert(getResponsesMainModelCandidates()[0] === "gpt-5.5" && getResponsesMainModelCandidates().length === 1, "Responses should use only the explicitly configured controller");
       assert(getResponsesImageToolModel("gpt-image-2") === "gpt-image-2", "Responses image tool model helper should preserve GPT Image models");
       assert(getResponsesImageToolModel("gpt-image-2.5-flare") === "gpt-image-2.5-flare", "Responses image tool model helper should preserve GPT Image 2.5 Flare model");
       assert(getResponsesImageToolModel("gpt-image-2.5-sunburst") === "gpt-image-2.5-sunburst", "Responses image tool model helper should preserve GPT Image 2.5 Sunburst model");
-      assert(getResponsesImageToolModel("not-an-image-model") === "", "Responses image tool model helper should omit non-image models");
+      assert(getResponsesImageToolModel("internal-model-alias") === "internal-model-alias", "Responses image tool must preserve opaque gateway model IDs");
       assert(getImageEditInputFidelity("gpt-image-2", true) === "", "GPT Image 2 should omit explicit input_fidelity because it is automatically high fidelity");
       assert(getImageEditInputFidelity("gpt-image-2.5-flare", true) === "", "GPT Image 2.5 Flare should omit explicit input_fidelity because it is automatically high fidelity");
       assert(getImageEditInputFidelity("gpt-image-2.5-sunburst", true) === "", "GPT Image 2.5 Sunburst should omit explicit input_fidelity because it is automatically high fidelity");
@@ -673,12 +680,11 @@ async function runVmSmoke() {
       assert(normalizeResponsesImageQuality("weird") === "auto", "Unknown Responses image tool quality should fall back to auto");
       assert(normalizeImageOutputFormat("image/webp") === "webp", "Image output format should accept MIME-style relay values");
       assert(normalizeBaseUrl("http://127.0.0.1:49456/v1") === "http://127.0.0.1:49456/v1", "Active 49456 Base URL should be preserved");
-      assert(normalizeBaseUrl("http://localhost:9456/v1/images/edits") === "http://127.0.0.1:49456/v1", "Legacy 9456 image URL should migrate to active 49456");
+      assert(normalizeBaseUrl("http://localhost:9456/v1/images/edits") === "http://localhost:9456/v1", "Base URL normalization must preserve the configured gateway port");
       assert(shouldUseSidecarImageEndpointsFirst(getSettings(), true), "Codex sidecar should prefer OpenAI-compatible image endpoints");
       assert(shouldPreserveUserInpaintSelection(getSettings()), "Sidecar inpaint should preserve the full user-drawn selection");
-      assert(!shouldUseChatGptStyleResponsesEdit(getSettings(), true), "Codex sidecar masked edits should use /images/edits before direct Responses");
-      assert(shouldUseChatGptStyleResponsesEdit(getSettings(), false, { screenshotReferenceEdit: true }), "Selection screenshot repaint should prefer direct Responses even with the Codex sidecar");
-      assert(shouldUseChatGptStyleResponsesEdit({ ...getSettings(), baseUrl: "https://example.com/v1" }, true), "Non-sidecar masked edits should still allow direct Responses first");
+      assert(gateway.configuration(getSettings()).protocol === "responses", "Responses is explicitly selected in this request-builder test");
+      assert(gateway.configuration({ ...getSettings(), apiProtocol: "images" }).protocol === "images", "Images must remain selected for every gateway host");
       assert(shouldUseSemanticInpaintSelection("把嘴巴闭上，其他部分完全不动"), "Mouth inpaint should still be recognized as a semantic target");
       assert(shouldUseSemanticInpaintSelection("把这一缕头发改成黑色的"), "Hair strand inpaint should still be recognized as a semantic target");
       const protectedNegativePrompt = buildPrompt("把头发改成黑色", "不要改变眼睛、鼻子、脸型、头发以外的部分");
@@ -804,7 +810,7 @@ async function runVmSmoke() {
       assert(capturedResponsesDebug?.screenshotReferenceEdit === true, "Selection screenshot repaint debug record should mark screenshotReferenceEdit");
       assert(capturedResponsesDebug?.inputContentOrder === "image-first", "Selection screenshot repaint debug record should expose image-first uploaded-reference content order");
       assert(capturedResponsesDebug?.imageToolInputFidelity === null && capturedResponsesDebug?.imageToolInputFidelityMode === "automatic-high", "Selection screenshot repaint debug record should expose GPT Image 2 automatic high-fidelity handling");
-      assert(Array.isArray(capturedResponsesDebug?.mainModelFallbacks) && capturedResponsesDebug.mainModelFallbacks.includes("gpt-5"), "Selection screenshot repaint debug record should expose Responses main-model fallbacks");
+      assert(Array.isArray(capturedResponsesDebug?.mainModelFallbacks) && capturedResponsesDebug.mainModelFallbacks.length === 0, "Selection screenshot repaint debug record should prove there are no implicit controller fallbacks");
       assert(capturedResponsesDebug?.prompt?.includes("普通上传图片") && capturedResponsesDebug?.prompt?.includes("NOT a mask"), "Selection screenshot repaint debug record should include the exact no-mask prompt");
       assert(capturedResponsesDebug?.imageBytes > 0 && capturedResponsesDebug?.imageFormat === "png", "Selection screenshot repaint debug record should expose image size and format metadata");
       assert(capturedResponsesDebug?.referenceSize === null && capturedResponsesDebug?.referenceCanvasSize === null, "Selection screenshot repaint debug record should keep absent geometry fields explicit");
@@ -812,39 +818,14 @@ async function runVmSmoke() {
       assert(!JSON.stringify(capturedResponsesDebug).includes(stripDataUrl(b64).slice(0, 24)), "Selection screenshot repaint debug record must not include image base64 bytes");
       const fallbackAttemptedModels = [];
       sendRequest = async (url, requestOptions) => {
-        assert(String(url).endsWith("/responses"), "Unavailable main-model retry should stay on /responses");
-        const payload = JSON.parse(String(requestOptions.body || "{}"));
-        fallbackAttemptedModels.push(payload.model);
-        if (fallbackAttemptedModels.length === 1) {
-          return {
-            ok: false,
-            status: 400,
-            statusText: "Bad Request",
-            text: async () => JSON.stringify({
-              error: {
-                code: "model_not_available",
-                message: "The requested main model is not available.",
-                type: "invalid_request_error",
-              },
-            }),
-          };
-        }
-        return {
-          ok: true,
-          status: 200,
-          statusText: "OK",
-          text: async () => JSON.stringify({
-            output: [{ type: "image_generation_call", result: b64, output_format: "png" }],
-          }),
-        };
+        fallbackAttemptedModels.push(JSON.parse(requestOptions.body).model);
+        return { ok: false, status: 404, statusText: "Not Found", text: async () => JSON.stringify({error:{code:"model_not_found",message:"model not found"}}) };
       };
-      const fallbackScreenshotItems = await requestSingleEdit(getSettings(), "把中间的手去掉，弓不要变", b64, null, {
-        size: "auto",
-        screenshotReferenceEdit: true,
-      });
+      let controllerRejected = false;
+      try { await requestSingleEdit(getSettings(), "edit", b64, null, { screenshotReferenceEdit: true }); }
+      catch (error) { controllerRejected = /model not found/.test(error.message); }
       sendRequest = savedSendRequest;
-      assert(fallbackScreenshotItems.length === 1, "Selection screenshot repaint should retry successfully when the first Responses main model is unavailable");
-      assert(fallbackAttemptedModels[0] === "gpt-5.5" && fallbackAttemptedModels[1] === "gpt-5", "Selection screenshot repaint should retry gpt-5 after gpt-5.5 model_not_available");
+      assert(controllerRejected && fallbackAttemptedModels.length === 1, "Unavailable controller must not rotate through unrelated models");
       let capturedJpegResponsesPayload = null;
       sendRequest = async (url, requestOptions) => {
         assert(String(url).endsWith("/responses"), "JPEG screenshot edit should still call /responses");
@@ -1048,47 +1029,9 @@ async function runVmSmoke() {
         rejectedEmptyStandardImageResponse = /没有可显示的图片数据/.test(String(error?.message || error));
       }
       assert(rejectedEmptyStandardImageResponse, "Standard image responses with no usable image data should fail before preview/import");
-      assert(shouldUseResponsesImageFallback({ status: 404 }, getSettings(), null), "No-mask reference edits should fall back when /images/edits is unavailable");
-      assert(shouldUseResponsesImageFallback({ status: 405 }, getSettings(), null), "No-mask reference edits should fall back when /images/edits is not allowed by a relay");
-      assert(shouldUseResponsesImageFallback({ status: 501 }, getSettings(), null), "No-mask reference edits should fall back when /images/edits is not implemented by a relay");
-      assert(!shouldUseResponsesImageFallback({ status: 401 }, getSettings(), null), "Image edit fallback must not hide auth failures");
-      assert(shouldUseResponsesGenerationFallback({ status: 405 }, getSettings()), "Text-to-image should fall back when /images/generations is not allowed by a relay");
-      assert(shouldUseResponsesGenerationFallback({ status: 501 }, getSettings()), "Text-to-image should fall back when /images/generations is not implemented by a relay");
-      assert(!shouldUseResponsesGenerationFallback({ status: 429 }, getSettings()), "Text-to-image fallback must not hide rate-limit failures");
-      let referenceFallbackImagesEditCalled = false;
-      let capturedReferenceFallbackPayload = null;
-      sendRequest = async (url, requestOptions) => {
-        if (String(url).endsWith("/images/edits")) {
-          referenceFallbackImagesEditCalled = true;
-          return {
-            ok: false,
-            status: 404,
-            statusText: "Not Found",
-            text: async () => JSON.stringify({ error: { message: "edits not found" } }),
-          };
-        }
-        assert(String(url).endsWith("/responses"), "No-mask reference edit fallback should call /responses after /images/edits 404");
-        capturedReferenceFallbackPayload = JSON.parse(String(requestOptions.body || "{}"));
-        return {
-          ok: true,
-          status: 200,
-          statusText: "OK",
-          text: async () => JSON.stringify({
-            output: [{ type: "image_generation_call", result: b64, output_format: "png" }],
-          }),
-        };
-      };
-      const referenceFallbackItems = await requestSingleEdit(getSettings(), "把亮度调清楚一点", b64, null, { size: "auto" });
-      sendRequest = savedSendRequest;
-      assert(referenceFallbackImagesEditCalled, "No-mask reference edit should try the sidecar /images/edits endpoint first");
-      assert(referenceFallbackItems.length === 1 && referenceFallbackItems[0].b64 === b64, "No-mask reference edit should recover through Responses image_generation");
-      assert(!JSON.stringify(capturedReferenceFallbackPayload).includes("input_image_mask"), "No-mask reference edit fallback must not send input_image_mask");
-      assert(capturedReferenceFallbackPayload?.tools?.[0]?.action === "edit", "No-mask reference edit fallback should use Responses edit action");
-      assert(capturedReferenceFallbackPayload?.tools?.[0]?.input_fidelity === undefined, "No-mask reference edit fallback with GPT Image 2 should omit explicit input_fidelity");
-      assert(state.unsupportedEditEndpoints.has(getEditEndpointKey(getSettings())), "No-mask /images/edits 404 should mark the edit endpoint unsupported");
-      assert(shouldUseChatGptStyleResponsesEdit(getSettings(), false), "Future no-mask sidecar reference edits should use Responses after /images/edits is marked unsupported");
-      state.unsupportedEditEndpoints.clear();
-      state.unsupportedResponsesEditEndpoints.clear();
+      // Images-only and Responses-only contracts, model 404 and transport
+      // ambiguity are exercised in test-gateway-tasks.js through real builders.
+      $("apiProtocolInput").value = "images";
       let capturedImagesEditForm = null;
       let capturedImagesEditDebug = null;
       let capturedLegacyImagesEditDebug = null;
@@ -1146,39 +1089,17 @@ async function runVmSmoke() {
       assert(legacyImageFormEntries.model === "gpt-image-1.5", "/images/edits compatibility route should keep legacy GPT Image model ids");
       assert(legacyImageFormEntries.input_fidelity === "high", "/images/edits compatibility route should request high input fidelity only for models that support it");
       assert(capturedLegacyImagesEditDebug?.inputFidelity === "high" && capturedLegacyImagesEditDebug?.inputFidelityMode === "explicit-high", "/images/edits debug record should show explicit high fidelity for supported legacy GPT Image models");
+      $("apiProtocolInput").value = "responses";
       let unsafeFallbackCalled = false;
-      let refusedUnsafeFallback = false;
       sendRequest = async (url) => {
-        if (String(url).endsWith("/responses")) {
-          return {
-            ok: false,
-            status: 404,
-            statusText: "Not Found",
-            text: async () => JSON.stringify({ error: { message: "not found" } }),
-          };
-        }
-        unsafeFallbackCalled = true;
-        return {
-          ok: true,
-          status: 200,
-          statusText: "OK",
-          text: async () => JSON.stringify({ data: [{ b64_json: b64 }] }),
-        };
+        if (!url.endsWith("/responses")) unsafeFallbackCalled = true;
+        return {ok:false,status:404,statusText:"Not Found",text:async()=>JSON.stringify({error:{message:"not found"}})};
       };
-      try {
-        await requestSingleEdit(getSettings(), "把中间的手去掉，弓不要变", b64, null, {
-          size: "auto",
-          screenshotReferenceEdit: true,
-        });
-      } catch (error) {
-        refusedUnsafeFallback = /避免退回旧的 Mask/.test(String(error?.message || error));
-      }
+      let refusedUnsafeFallback = false;
+      try { await requestSingleEdit(getSettings(), "edit", b64, null, { screenshotReferenceEdit: true }); }
+      catch(error) { refusedUnsafeFallback = /404/.test(error.message); }
       sendRequest = savedSendRequest;
-      assert(refusedUnsafeFallback, "Selection screenshot repaint should fail safely when /responses is unavailable");
-      assert(!unsafeFallbackCalled, "Selection screenshot repaint must not silently fall back to /images/edits");
-      state.unsupportedResponsesEditEndpoints.add(getResponsesEditEndpointKey(getSettings()));
-      assert(shouldUseChatGptStyleResponsesEdit(getSettings(), false, { screenshotReferenceEdit: true }), "Selection screenshot repaint must bypass stale unsupported /responses cache");
-      state.unsupportedResponsesEditEndpoints.clear();
+      assert(refusedUnsafeFallback && !unsafeFallbackCalled, "An explicit protocol must not change after a 404");
       let rejectedBadImport = false;
       try {
         await resultToArrayBuffer({ importB64: Promise.resolve(b64), b64 }, true);
@@ -2189,8 +2110,8 @@ async function runVmSmoke() {
       renderResults = () => { materializedRenderPasses += 1; };
       prepareCroppedPreviews = async (items) => {
         materializedPreviewPasses += 1;
-        if (materializedPreviewPasses === 2) {
-          assert(items?.[0]?.b64 === b64 && !items?.[0]?.url, "Second preview preparation should see the materialized local bytes, not the stale URL");
+        if (materializedPreviewPasses === 1) {
+          assert(items?.[0]?.b64 === b64 && !items?.[0]?.url, "Preview preparation must see saved local bytes on its first pass");
         }
       };
       saveHistoryItem = async (item) => {
@@ -2208,7 +2129,7 @@ async function runVmSmoke() {
       prepareCroppedPreviews = savedPrepareCroppedPreviewsForMaterializedUrl;
       saveHistoryItem = savedSaveHistoryItemForMaterializedUrl;
       requestGenerations = savedRequestGenerationsForMaterializedUrl;
-      assert(materializedPreviewPasses === 2, "URL-only result materialization should run cropped-preview preparation again after history save");
+      assert(materializedPreviewPasses === 1, "URL-only results must be saved before the first preview pass");
       assert(materializedRenderPasses >= 2, "URL-only result materialization should re-render result cards after local bytes are available");
 
       const importBytesB64 = bytesToBase64(encodePngRgba(3, 3, new Uint8Array(36).fill(128)));

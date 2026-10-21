@@ -1,6 +1,6 @@
 # OpenAI Photoshop Generator
 
-Current version: **v0.1.313**
+Current version: **v0.1.314**
 
 ![OpenAI Photoshop Generator running inside Adobe Photoshop](stitch-reference/photoshop-panel-v0163.png)
 
@@ -126,3 +126,13 @@ Do not commit API keys, private PSD files, generated client assets, or local plu
 ## License
 
 MIT License. See [`LICENSE`](LICENSE).
+
+## Gateway and task recovery (v0.1.314)
+
+Select Images API (default) or Responses explicitly in service settings. Configure the gateway base URL, paths, image model ID, Responses controller and fast/deep button aliases. Model IDs and ports are preserved; errors never silently change the selected protocol or controller. Existing settings without a protocol field migrate to Images. A `/models` probe does not prove image-generation capability.
+
+Tasks capture mode, source document/canvas, selection, settings, references and margins. Accepted outputs are saved individually before processing and placement. Partial batches survive later failures or cancellation; durable JSON sidecars recover history if the local index is lost. Storage failures stop later submissions. Placement can be retried without generating again. Raw outputs whose normalization failed remain available on disk and cannot be imported as unchecked coordinate patches.
+
+Results are bound to their source document. Use **绑定当前文档** to explicitly target a compatible document, including history from another session. Clearing history hides old records without deleting image files. Timeout and transport failures do not automatically replay billable POSTs; fetch deadlines abort the actual request, including stalled response bodies.
+
+Run `npm run test:gateway` for offline UXP regressions and a loopback mock-gateway HTTP contract test. Existing native transparency and precise RGBA placement regressions remain part of `npm run smoke`.

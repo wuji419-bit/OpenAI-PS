@@ -1,6 +1,6 @@
 # OpenAI Photoshop Generator
 
-当前版本：**v0.1.313**
+当前版本：**v0.1.314**
 
 这是一个从零写的轻量版 Photoshop UXP 插件，目标是在 Photoshop 里直接完成 OpenAI 图像生成、局部重绘、扩图和拆图。
 
@@ -8,7 +8,7 @@
 
 - 文生图：输入提示词生成图片。
 - 参考图编辑：可在面板里手动选择 PNG/JPG/WebP 参考图进行图生图；未选择手动参考图时，才会把当前 Photoshop 选区或整张画布导出为参考图。
-- 选区重绘：按原选区导出保留 Alpha 的普通参考图，通过 `/responses` 上传编辑，不发送 API mask；极小选区按预乘 Alpha 插值放大，返回后恢复原尺寸，并按原坐标直接写入 RGBA 像素，避免透明边距导致缩放漂移。
+- 选区重绘：按原选区导出保留 Alpha 的普通参考图，通过已选择的 Images API 或 Responses 上传编辑，不发送 API mask；极小选区按预乘 Alpha 插值放大，返回后恢复原尺寸，并按原坐标直接写入 RGBA 像素，避免透明边距导致缩放漂移。
 - 扩图：按上、下、左、右边距生成扩图输入和 mask。
 - 透明背景：GPT Image 2.5 可直接输出带 alpha 通道的透明 PNG 图层。
 - 拆图：用精准的 `gpt-image-2.5-sunburst` 原生透明通道识别并抽取独立语义图层，也支持在提示词里手动指定拆图目标。
@@ -101,8 +101,8 @@ OpenAI-PS-Installer-版本号-win-x64.exe --uninstall
    - 编辑接口：`/images/edits`
    - API Key：填本地服务要求的密钥
    - 模型：填本地服务支持的图片模型 ID
-5. 选区重绘会优先使用 `/responses` 的 `image_generation` 工具执行 ChatGPT 风格截图编辑；如果该接口不可用，会停止并报错，避免退回旧的 mask 编辑路径。
-6. `/responses` 图像工具的主控模型默认使用 `gpt-5.5`；如果服务返回 `model_not_available`，插件会自动尝试备用主控模型，但仍会把配置里的 GPT Image 2.5 模型保留在图像生成工具上。
+5. 选择网关支持的 API 协议：Images 通过 `/images/edits` 普通上传截图，Responses 通过 `image_generation` 工具编辑；选区重绘都不发送 API mask。
+6. Responses 控制模型默认 `gpt-5.5`，可在设置中改为网关实际支持的 ID；图片模型由 Model ID 指定。模型错误不会触发自动换模型。
 7. 选区重绘的提示词约束是通用规则：按用户文字识别要移除或修改的完整可见目标，并把用户明确说“不变/保持/保留/不要动”的内容当作保护参考，不依赖“手、弓”等特定对象词。
 8. `/chat/completions` 是聊天接口，不是标准图片接口。除非你的本地服务自己把聊天接口改成返回图片 base64，否则图片插件应使用图片接口。
 8. 选择模式，填写提示词；“参考图”模式可以先点“选择参考图”放入本机图片，“选区重绘”模式则读取 Photoshop 当前选区并按原位置放回。
@@ -153,7 +153,7 @@ node scripts/restart-photoshop-and-smoke.js --confirm-saved
 
 ## 接口路由
 
-文生图、参考图、选区重绘、扩图、拆图都走 OpenAI 兼容图片接口。其中选区重绘走 `/responses` 图片工具，不走 `/images/edits` mask 上传。
+文生图、参考图、选区重绘、扩图、拆图都走 OpenAI 兼容图片接口。选区重绘和参考图始终不发送 API mask；Images 协议使用 `/images/edits` 普通图片上传，Responses 协议使用图片工具。扩图保留编辑 mask。
 
 ## 下一步建议
 
@@ -169,3 +169,15 @@ node scripts/restart-photoshop-and-smoke.js --confirm-saved
 - 恢复原图最简单的方法是撤销该步骤；也可隐藏生成层并禁用新的源图分组蒙版。
 - `npm run test:alpha` 输出 `NATIVE_TRANSPARENCY_OK`；`npm run smoke` 同时运行原有 smoke 和原生透明回归，不调用收费接口。
 - `audit-plugin-state.js --strict-runtime` 只有真实 Photoshop 会话加载对应版本才可通过；Photoshop 未运行时，普通审计最多报告 `ready_on_disk`，不能当成实际宿主验证。
+
+## 内部网关、任务保护与结果恢复（v0.1.314）
+
+在服务设置填写网关 Base URL 和 API Key，显式选择 Images API（默认）或 Responses。Images 使用可配置的生图/编辑路径；Responses 使用可配置的 Responses Path 和控制模型。Model ID 是图片模型，允许网关自定义别名；快速/深度按钮的映射也可单独配置。旧版没有协议字段的配置升级后默认 Images，请按网关实际能力选择。不会根据端口、404 或模型错误自动换协议或控制模型；测试连接仅验证 `/models` 的可达性和鉴权。
+
+一次任务固定生成时的模式、文档、画布尺寸、选区、参数和参考图。生成期间切换模式不会改变任务；切换文档或改画布后停止自动回填，返回图片仍会保存。当前会话的结果默认绑定原文档；跨会话历史或需要改目标时，选中结果后点击“绑定当前文档”。原坐标编辑结果要求画布尺寸匹配。
+
+每张图片返回后先写插件数据目录 `history/`，图片旁保存同 ID 的 JSON 元数据。后续图片失败或取消时保留成功结果；点击历史“加载”可以从元数据恢复丢失的索引。自动导入失败时直接再次导入，不重复生成。若尺寸处理失败，会保留 `.raw` 原图并阻止不安全回填；存储失败会停止后续请求并保留当前内存结果。清空历史清除列表，不删除图片文件。
+
+网络异常、超时只能确定客户端没收到完整结果，不能证明服务器没有执行，因此不会自动重复提交。若网关需要长时间生成，默认生图等待 180 秒、编辑等待 12 分钟。真实网关参数和计费行为需要另外验证。
+
+`npm run test:gateway` 在模拟 UXP 和本机临时 HTTP 服务上验证路由、任务保护、逐张保存、恢复与取消；不访问图片服务。
